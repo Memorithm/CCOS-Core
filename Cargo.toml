@@ -146,6 +146,14 @@ name = "ccos"
 path = "src/main.rs"
 required-features = ["llm"]
 
+# RAG → CCOS migration utility. Imports a CCOS Migration Bundle (produced from any
+# RAG store by `tools/rag2ccos`) into a causal workspace, losslessly. Uses only the
+# sync core (no async / no `llm`), so it builds in the default feature set — a
+# self-contained tool you can ship without the full CLI. See `docs/MIGRATION.md`.
+[[bin]]
+name = "ccos-migrate"
+path = "src/bin/ccos-migrate.rs"
+
 [[bench]]
 name = "delta_bench"
 harness = false
