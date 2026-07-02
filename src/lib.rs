@@ -152,6 +152,7 @@ pub mod util;
 // ── CCOS v0.3 — Autonomous Context Runtime ──────────────────────────
 pub mod agents;
 pub mod benchmark;
+pub mod causal_flash;
 pub mod persistence;
 pub mod scheduler;
 #[cfg(feature = "llm")]
