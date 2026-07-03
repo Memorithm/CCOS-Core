@@ -127,6 +127,36 @@ impl From<serde_json::Error> for MemoryError {
     }
 }
 
+/// Parameters of a [`Recall::CausalFlash`] selection. Recorded verbatim in the
+/// `Op::Recall` op so a replay reconstructs the same cone from the same graph
+/// state (`replay == live`). The token budget is NOT here — it is applied by the
+/// window assembler like every other strategy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CausalFlashRecall {
+    /// Max dependency depth `n` from the Working frontier.
+    pub horizon: usize,
+    /// Per-hop relevance decay in `(0, 1]`.
+    pub decay: f64,
+    /// Include the one-hop caller (in-edge) impact ring.
+    pub include_callers: bool,
+    /// Also seed from low-trust nodes, not only `Working`.
+    pub include_low_trust_seeds: bool,
+    /// Low-trust seeding threshold.
+    pub trust_threshold: f64,
+}
+
+impl Default for CausalFlashRecall {
+    fn default() -> Self {
+        Self {
+            horizon: 3,
+            decay: 0.5,
+            include_callers: true,
+            include_low_trust_seeds: false,
+            trust_threshold: 0.5,
+        }
+    }
+}
+
 /// How a [`recall`](ExternalMemory::recall) selects its context window.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Recall {
@@ -154,12 +184,24 @@ pub enum Recall {
     /// this fuses lexical and semantic, and once a failure is signalled the
     /// failing region joins the vote. The most robust entry point; deterministic.
     Hybrid(String),
+    /// A **bounded causal cone** rooted at the active (`Working`) frontier: the
+    /// scale path. Instead of ranking the whole graph, select the dependency
+    /// closure of the working set (to a horizon) plus its one-hop caller ring,
+    /// then let the assembler fit the token budget. Cheap, local, deterministic
+    /// — no global sweep. Appended last so the serialized form stays strictly
+    /// additive (old snapshots never contain it). See [`crate::causal_flash`].
+    CausalFlash(CausalFlashRecall),
 }
 
 impl Recall {
     /// The globally hottest working set.
     pub fn working_set() -> Self {
         Recall::WorkingSet
+    }
+
+    /// A bounded causal-cone selection rooted at the `Working` frontier.
+    pub fn causal_flash(params: CausalFlashRecall) -> Self {
+        Recall::CausalFlash(params)
     }
     /// Recall from a free-text task description by semantic similarity.
     pub fn semantic(text: impl Into<String>) -> Self {
@@ -1671,6 +1713,28 @@ impl ExternalMemory for CcosMemory {
                         self.assemble_window("hybrid-region", Vec::new(), budget_tokens, None, None)
                     }
                 }
+            }
+            Recall::CausalFlash(p) => {
+                // The cone is the SELECTION (which nodes); the assembler ranks
+                // the selected nodes by causal score and fits the token budget,
+                // consistently with every other strategy. `max_nodes` stays None
+                // here so budgeting happens once, in the assembler.
+                let cfg = crate::causal_flash::CausalFlashConfig {
+                    horizon: p.horizon,
+                    decay: p.decay,
+                    include_callers: p.include_callers,
+                    include_low_trust_seeds: p.include_low_trust_seeds,
+                    trust_threshold: p.trust_threshold,
+                    max_nodes: None,
+                };
+                let ids: Vec<NodeId> = self
+                    .graph
+                    .causal_flash_window(&cfg)
+                    .nodes
+                    .into_iter()
+                    .map(|nd| nd.id)
+                    .collect();
+                self.assemble_window("causal-flash", ids, budget_tokens, None, None)
             }
         }
     }

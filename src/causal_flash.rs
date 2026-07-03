@@ -136,38 +136,63 @@ fn is_dependency_edge(t: &EdgeType) -> bool {
     )
 }
 
-impl MemoryGraph {
-    /// Compute the [`CausalWindow`] for the current active frontier under `cfg`.
-    ///
-    /// Cost is `O(E)` to index the resident edges once plus `O(cone)` to
-    /// traverse — never the `O(iterations · E)` of a global eigenvector sweep,
-    /// which is the whole point at scale.
-    pub fn causal_flash_window(&self, cfg: &CausalFlashConfig) -> CausalWindow {
-        let decay = cfg.decay.clamp(f64::MIN_POSITIVE, 1.0);
+/// A reusable dependency-adjacency index over the resident graph, built once
+/// (`O(E)`) and shared across many [`MemoryGraph::causal_flash_window_with`]
+/// calls so the hot path is `O(cone)` rather than `O(E)` per tick. Owns its
+/// ids, so it outlives the borrow that built it and can be cached by the caller
+/// and rebuilt only when edges change.
+#[derive(Debug, Clone, Default)]
+pub struct CausalAdjacency {
+    /// `source → [(dependency, weight)]`, each list sorted by id.
+    fwd: BTreeMap<NodeId, Vec<(NodeId, f64)>>,
+    /// `target → [caller]`, each list sorted.
+    rev: BTreeMap<NodeId, Vec<NodeId>>,
+}
 
-        // Forward (dependency) and reverse (caller) adjacency, restricted to
-        // dependency edge types. Sorted for deterministic expansion.
-        let mut fwd: BTreeMap<&NodeId, Vec<(&NodeId, f64)>> = BTreeMap::new();
-        let mut rev: BTreeMap<&NodeId, Vec<&NodeId>> = BTreeMap::new();
+impl MemoryGraph {
+    /// Build a reusable [`CausalAdjacency`] over the resident dependency edges.
+    /// `O(E)`. Cache it and pass it to [`causal_flash_window_with`] on the hot
+    /// path; rebuild only when the edge set changes.
+    ///
+    /// [`causal_flash_window_with`]: MemoryGraph::causal_flash_window_with
+    pub fn causal_adjacency(&self) -> CausalAdjacency {
+        let mut fwd: BTreeMap<NodeId, Vec<(NodeId, f64)>> = BTreeMap::new();
+        let mut rev: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
         for e in self.edges() {
             if !is_dependency_edge(&e.edge_type) {
                 continue;
             }
-            fwd.entry(&e.source)
+            fwd.entry(e.source.clone())
                 .or_default()
-                .push((&e.target, e.weight));
-            rev.entry(&e.target).or_default().push(&e.source);
+                .push((e.target.clone(), e.weight));
+            rev.entry(e.target.clone())
+                .or_default()
+                .push(e.source.clone());
         }
         for v in fwd.values_mut() {
-            v.sort_by(|a, b| a.0.cmp(b.0));
+            v.sort_by(|a, b| a.0.cmp(&b.0));
         }
         for v in rev.values_mut() {
             v.sort();
         }
+        CausalAdjacency { fwd, rev }
+    }
 
+    /// Compute the [`CausalWindow`] for the current active frontier under `cfg`.
+    ///
+    /// Convenience path: builds a fresh adjacency index and scans for the
+    /// `Working` seeds, so this is a **single `O(N + E)` pass** — versus the
+    /// `O(iterations · (N + E))` power iteration of the global eigenvector
+    /// centrality it replaces (the win is the iteration factor), plus a bounded,
+    /// token-budgeted OUTPUT whose size is invariant to `N`. On the hot path,
+    /// cache a [`CausalAdjacency`] and pass explicit seeds to
+    /// [`causal_flash_window_with`] for `O(cone)` per tick.
+    ///
+    /// [`causal_flash_window_with`]: MemoryGraph::causal_flash_window_with
+    pub fn causal_flash_window(&self, cfg: &CausalFlashConfig) -> CausalWindow {
+        let adj = self.causal_adjacency();
         // Seeds: Working nodes (∪ low-trust when enabled), never Orphan.
-        // BTreeSet keyed by id ⇒ deterministic seed order.
-        let mut seeds: BTreeSet<&NodeId> = BTreeSet::new();
+        let mut seeds: BTreeSet<NodeId> = BTreeSet::new();
         for (id, node) in self.node_entries() {
             if node.state == NodeState::Orphan {
                 continue;
@@ -175,38 +200,70 @@ impl MemoryGraph {
             let is_working = node.state == NodeState::Working;
             let is_low_trust = cfg.include_low_trust_seeds && node.trust < cfg.trust_threshold;
             if is_working || is_low_trust {
-                seeds.insert(id);
+                seeds.insert(id.clone());
             }
         }
+        self.cone_core(cfg, &adj, seeds)
+    }
+
+    /// The `O(cone)` hot path: reuse a cached [`CausalAdjacency`] and pass the
+    /// seed frontier explicitly (the agent already knows what it is working on),
+    /// so neither the `O(E)` edge scan nor the `O(N)` `Working`-node scan is
+    /// repeated. Seeds are taken as given (the `include_low_trust_seeds` /
+    /// `trust_threshold` config is ignored here); non-resident or `Orphan` seed
+    /// ids are dropped.
+    pub fn causal_flash_window_with(
+        &self,
+        cfg: &CausalFlashConfig,
+        adj: &CausalAdjacency,
+        seed_ids: &[NodeId],
+    ) -> CausalWindow {
+        let mut seeds: BTreeSet<NodeId> = BTreeSet::new();
+        for id in seed_ids {
+            if self.node(id).is_some_and(|n| n.state != NodeState::Orphan) {
+                seeds.insert(id.clone());
+            }
+        }
+        self.cone_core(cfg, adj, seeds)
+    }
+
+    /// Shared cone traversal + assembly over a prebuilt adjacency and an explicit
+    /// seed set. Deterministic: every structure is keyed/ordered by `NodeId`.
+    fn cone_core(
+        &self,
+        cfg: &CausalFlashConfig,
+        adj: &CausalAdjacency,
+        seeds: BTreeSet<NodeId>,
+    ) -> CausalWindow {
+        let decay = cfg.decay.clamp(f64::MIN_POSITIVE, 1.0);
         let seed_count = seeds.len();
 
-        // depth + accumulated relevance per cone node; role tracked separately.
-        let mut depth: BTreeMap<&NodeId, usize> = BTreeMap::new();
-        let mut relevance: BTreeMap<&NodeId, f64> = BTreeMap::new();
+        let mut depth: BTreeMap<NodeId, usize> = BTreeMap::new();
+        let mut relevance: BTreeMap<NodeId, f64> = BTreeMap::new();
         for s in &seeds {
-            depth.insert(s, 0);
-            relevance.insert(s, 1.0);
+            depth.insert(s.clone(), 0);
+            relevance.insert(s.clone(), 1.0);
         }
 
         // Layered BFS along dependency edges, bounded by the horizon.
-        let mut frontier: Vec<&NodeId> = seeds.iter().copied().collect();
-        let mut cut_deps: BTreeSet<&NodeId> = BTreeSet::new();
+        let mut frontier: Vec<NodeId> = seeds.iter().cloned().collect();
+        let mut cut_deps: BTreeSet<NodeId> = BTreeSet::new();
         for d in 1..=cfg.horizon {
-            let mut next: BTreeSet<&NodeId> = BTreeSet::new();
-            for &parent in &frontier {
+            let mut next: BTreeSet<NodeId> = BTreeSet::new();
+            for parent in &frontier {
                 let prel = relevance[parent];
-                if let Some(children) = fwd.get(parent) {
-                    for &(child, w) in children {
+                if let Some(children) = adj.fwd.get(parent) {
+                    for (child, w) in children {
                         // Orphan (dead/unreachable) nodes are excluded from the
                         // structural cone, exactly as they are from centrality.
                         if self.node(child).map(|x| x.state) == Some(NodeState::Orphan) {
                             continue;
                         }
                         let contrib = prel * decay * w;
-                        *relevance.entry(child).or_insert(0.0) += contrib;
+                        *relevance.entry(child.clone()).or_insert(0.0) += contrib;
                         if !depth.contains_key(child) {
-                            depth.insert(child, d);
-                            next.insert(child);
+                            depth.insert(child.clone(), d);
+                            next.insert(child.clone());
                         }
                     }
                 }
@@ -218,15 +275,15 @@ impl MemoryGraph {
         }
         // Anything still on the frontier after the last layer is a cut dependency.
         if cfg.horizon > 0 {
-            for &parent in &frontier {
-                if let Some(children) = fwd.get(parent) {
-                    for &(child, _) in children {
+            for parent in &frontier {
+                if let Some(children) = adj.fwd.get(parent) {
+                    for (child, _) in children {
                         // An excluded Orphan is not an omitted dependency.
                         if self.node(child).map(|x| x.state) == Some(NodeState::Orphan) {
                             continue;
                         }
                         if !depth.contains_key(child) {
-                            cut_deps.insert(child);
+                            cut_deps.insert(child.clone());
                         }
                     }
                 }
@@ -236,11 +293,11 @@ impl MemoryGraph {
 
         // Assemble cone nodes (seed / dependency), skipping any id not resident.
         let mut out: Vec<CausalWindowNode> = Vec::new();
-        for (&id, &d) in &depth {
+        for (id, &d) in &depth {
             let Some(node) = self.node(id) else {
                 continue;
             };
-            let role = if seeds.contains(&id) {
+            let role = if seeds.contains(id) {
                 CausalRole::Seed
             } else {
                 CausalRole::Dependency
@@ -257,14 +314,14 @@ impl MemoryGraph {
 
         // One-hop caller ring (impact), for cone nodes with in-edges. Deterministic
         // via the sorted reverse adjacency and a BTreeSet of already-included ids.
-        let cone_ids: BTreeSet<&NodeId> = depth.keys().copied().collect();
+        let cone_ids: BTreeSet<NodeId> = depth.keys().cloned().collect();
         let mut caller_added: BTreeSet<NodeId> = BTreeSet::new();
         if cfg.include_callers {
-            for &cone in &cone_ids {
-                if let Some(callers) = rev.get(cone) {
+            for cone in &cone_ids {
+                if let Some(callers) = adj.rev.get(cone) {
                     let base = relevance.get(cone).copied().unwrap_or(0.0);
-                    for &caller in callers {
-                        if cone_ids.contains(&caller) || caller_added.contains(caller) {
+                    for caller in callers {
+                        if cone_ids.contains(caller) || caller_added.contains(caller) {
                             continue;
                         }
                         let Some(node) = self.node(caller) else {
@@ -310,8 +367,6 @@ impl MemoryGraph {
         // `max_nodes`. Dependencies are never dropped.
         if let Some(cap) = cfg.max_nodes {
             if out.len() > cap {
-                // Indices of callers, ordered by ascending relevance then id, are
-                // the drop candidates.
                 let mut callers: Vec<usize> = out
                     .iter()
                     .enumerate()
@@ -514,6 +569,74 @@ mod tests {
             win.nodes.iter().all(|x| x.role != CausalRole::Caller) || win.nodes.len() == 3,
             "callers are the only drop candidates"
         );
+    }
+
+    // The scale claim, made non-flaky: the cone's OUTPUT (and thus its cost) is
+    // invariant to total graph size. The same local structure surrounded by 10
+    // vs 3000 unrelated bulk nodes yields the identical window — a global
+    // centrality pass would instead scale with the bulk.
+    #[test]
+    fn cone_is_invariant_to_total_graph_size() {
+        let window_ids = |bulk: usize| -> Vec<String> {
+            let mut g = MemoryGraph::new(0.2, usize::MAX);
+            // Fixed local cone: w → d1 → d2, and a caller c → w.
+            for id in ["w", "d1", "d2", "c"] {
+                n(&mut g, id);
+            }
+            dep(&mut g, "w", "d1");
+            dep(&mut g, "d1", "d2");
+            dep(&mut g, "c", "w");
+            g.set_node_state(&"w".into(), NodeState::Working);
+            // Unrelated bulk: a disconnected dependency chain of Stable nodes.
+            for i in 0..bulk {
+                n(&mut g, &format!("bulk_{i}"));
+                if i > 0 {
+                    dep(&mut g, &format!("bulk_{i}"), &format!("bulk_{}", i - 1));
+                }
+            }
+            let mut ids: Vec<String> = g
+                .causal_flash_window(&CausalFlashConfig::default())
+                .nodes
+                .iter()
+                .map(|x| x.id.0.clone())
+                .collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(
+            window_ids(10),
+            window_ids(3000),
+            "the cone must not grow with unrelated graph bulk"
+        );
+        // And it is exactly the local structure (w, d1, d2 + caller c).
+        assert_eq!(window_ids(10), vec!["c", "d1", "d2", "w"]);
+    }
+
+    // The hot path (prebuilt adjacency + explicit seeds) yields the identical
+    // window to the convenience path, so caching the index is a pure speedup.
+    #[test]
+    fn prebuilt_index_hot_path_matches_the_convenience_path() {
+        let mut g = MemoryGraph::new(0.2, usize::MAX);
+        for id in ["w", "a", "b", "c"] {
+            n(&mut g, id);
+        }
+        dep(&mut g, "w", "a");
+        dep(&mut g, "a", "b");
+        dep(&mut g, "c", "w");
+        g.set_node_state(&"w".into(), NodeState::Working);
+
+        let cfg = CausalFlashConfig::default();
+        let convenience = g.causal_flash_window(&cfg);
+
+        let adj = g.causal_adjacency();
+        let hot = g.causal_flash_window_with(&cfg, &adj, &["w".into()]);
+
+        let ids = |w: &CausalWindow| -> Vec<(String, usize)> {
+            w.nodes.iter().map(|x| (x.id.0.clone(), x.depth)).collect()
+        };
+        assert_eq!(ids(&convenience), ids(&hot), "hot path == convenience path");
+        assert_eq!(convenience.complete, hot.complete);
+        assert_eq!(convenience.seed_count, hot.seed_count);
     }
 
     // Low-trust seeding brings a suspect node (and its cone) into view even when

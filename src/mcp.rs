@@ -6,13 +6,16 @@
 //! memory lives in an [`AgentSession`], so the whole interaction is event-sourced
 //! and replayable.
 //!
-//! Thirteen tools: `ingest`, `recall`, `signal_failure`, `page_fault`, `stats`,
+//! Fourteen tools: `ingest`, `recall`, `signal_failure`, `page_fault`, `stats`,
 //! `verify`, the time-travel pair `timeline` / `recall_what_if`, `ccos_retrieve`
 //! (fetch the original of a compressed item), the causal-intervention pair
 //! `causal_intervene` (do(X): what a change forces) / `causal_blame` (candidate
 //! root causes), `drift_cause` (which recorded op moved a node's score —
-//! change-point attribution), and `retrodict_belief` (the RTS-smoothed belief
-//! trajectory: future evidence folded back into past steps). It also exposes two
+//! change-point attribution), `retrodict_belief` (the RTS-smoothed belief
+//! trajectory: future evidence folded back into past steps), and `causal_flash`
+//! (a bounded causal-cone context window rooted at the active frontier — a
+//! high-density summary that scales without recomputing global centrality). It
+//! also exposes two
 //! read-only **resources** — `ccos://session/context` (the current
 //! self-bounding working set, linearised for direct injection into a system
 //! prompt) and `ccos://session/timeline` (the cognitive journal).
@@ -43,10 +46,18 @@ fn tool_specs() -> Value {
         "semantic",
         "hybrid",
         "working_set",
+        "causal-flash",
         "octa-semantic"
     ]);
     #[cfg(not(feature = "octasoma"))]
-    let recall_strategies = json!(["around", "task", "semantic", "hybrid", "working_set"]);
+    let recall_strategies = json!([
+        "around",
+        "task",
+        "semantic",
+        "hybrid",
+        "working_set",
+        "causal-flash"
+    ]);
     let tools = json!([
         {
             "name": "ingest",
@@ -69,7 +80,12 @@ fn tool_specs() -> Value {
                     "strategy": {"type": "string", "enum": recall_strategies},
                     "anchor": {"type": "string", "description": "node id / file uri for 'around'"},
                     "text": {"type": "string", "description": "free-text task for 'task' / 'semantic' (and the Pro 'octa-semantic')"},
-                    "budget": {"type": "integer", "description": "token budget (default 2048)"}
+                    "budget": {"type": "integer", "description": "token budget (default 2048)"},
+                    "horizon": {"type": "integer", "description": "'causal-flash': max dependency depth (default 3)"},
+                    "decay": {"type": "number", "description": "'causal-flash': per-hop relevance decay in (0,1] (default 0.5)"},
+                    "include_callers": {"type": "boolean", "description": "'causal-flash': add the one-hop caller impact ring (default true)"},
+                    "include_low_trust_seeds": {"type": "boolean", "description": "'causal-flash': also seed from low-trust nodes, not just Working (default false)"},
+                    "trust_threshold": {"type": "number", "description": "'causal-flash': low-trust seeding threshold (default 0.5)"}
                 }
             }
         },
@@ -190,6 +206,21 @@ fn tool_specs() -> Value {
                 },
                 "required": ["claim"]
             }
+        },
+        {
+            "name": "causal_flash",
+            "description": "Bounded causal-cone context for the active frontier: seed from Working (optionally low-trust) nodes, follow dependency (out-) edges to horizon n (or a fixpoint), add a one-hop caller ring for impact, and rank by decayed in-cone relevance. A high-density causal summary that fits a token budget WITHOUT recomputing global centrality — the scale lever for large graphs. Deterministic, read-only; reports a completeness flag (true iff the dependency closure was not cut).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "horizon": {"type": "integer", "description": "max dependency depth n (default 3)"},
+                    "decay": {"type": "number", "description": "per-hop relevance decay in (0,1] (default 0.5)"},
+                    "include_callers": {"type": "boolean", "description": "add the one-hop in-edge impact ring (default true)"},
+                    "include_low_trust_seeds": {"type": "boolean", "description": "also seed from low-trust nodes, not just Working (default false)"},
+                    "trust_threshold": {"type": "number", "description": "seed a node when include_low_trust_seeds and trust < this (default 0.5)"},
+                    "max_nodes": {"type": "integer", "description": "token budget: cap node count, dropping callers first; dependencies are never dropped (default unbounded)"}
+                }
+            }
         }
     ]);
     // The Pro octa-semantic feedback surface exists only in `octasoma` builds: the
@@ -286,6 +317,21 @@ fn recall_from_args(args: &Value) -> Recall {
         "task" => Recall::task(str_arg(args, "text")),
         "semantic" => Recall::semantic(str_arg(args, "text")),
         "hybrid" => Recall::hybrid(str_arg(args, "text")),
+        "causal-flash" | "causal_flash" => {
+            Recall::causal_flash(crate::external_memory::CausalFlashRecall {
+                horizon: args.get("horizon").and_then(Value::as_u64).unwrap_or(3) as usize,
+                decay: f64_arg(args, "decay", 0.5),
+                include_callers: args
+                    .get("include_callers")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+                include_low_trust_seeds: args
+                    .get("include_low_trust_seeds")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                trust_threshold: f64_arg(args, "trust_threshold", 0.5),
+            })
+        }
         _ => Recall::working_set(),
     }
 }
@@ -606,6 +652,49 @@ fn call_tool(
                 "belief_retrodicted": profile.retrodicted_belief(&id, q, r),
                 "tension": profile.tension_series(&id),
                 "tension_retrodicted": profile.retrodicted_tension(&id, q, r),
+            })
+            .to_string()
+        }
+        "causal_flash" => {
+            let cfg = crate::causal_flash::CausalFlashConfig {
+                horizon: args.get("horizon").and_then(Value::as_u64).unwrap_or(3) as usize,
+                decay: f64_arg(&args, "decay", 0.5),
+                include_callers: args
+                    .get("include_callers")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+                include_low_trust_seeds: args
+                    .get("include_low_trust_seeds")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                trust_threshold: f64_arg(&args, "trust_threshold", 0.5),
+                max_nodes: args
+                    .get("max_nodes")
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize),
+            };
+            let win = session.memory().graph().causal_flash_window(&cfg);
+            let rows: Vec<Value> = win
+                .nodes
+                .iter()
+                .map(|n| {
+                    json!({
+                        "node": n.id.0,
+                        "role": match n.role {
+                            crate::causal_flash::CausalRole::Seed => "seed",
+                            crate::causal_flash::CausalRole::Dependency => "dependency",
+                            crate::causal_flash::CausalRole::Caller => "caller",
+                        },
+                        "depth": n.depth,
+                        "relevance": n.relevance,
+                    })
+                })
+                .collect();
+            json!({
+                "seed_count": win.seed_count,
+                "complete": win.complete,
+                "omitted": win.omitted,
+                "nodes": rows,
             })
             .to_string()
         }
@@ -935,6 +1024,7 @@ mod tests {
             "causal_blame",
             "drift_cause",
             "retrodict_belief",
+            "causal_flash",
         ] {
             assert!(names.contains(&n), "missing tool {n}");
         }
@@ -1246,6 +1336,110 @@ mod tests {
     }
 
     #[test]
+    fn causal_flash_returns_a_bounded_cone_over_mcp() {
+        let mut s = AgentSession::new();
+        chain(&mut s); // api → repo → db, all Stable (no Working seed)
+
+        // No Working nodes and default (no low-trust) seeding ⇒ an empty,
+        // well-formed window. Verifies dispatch, arg defaults, and JSON shape.
+        let r = handle(
+            &mut s,
+            &req(4, "tools/call", json!({ "name": "causal_flash" })),
+        )
+        .unwrap();
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        let v: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(v["seed_count"], 0);
+        assert_eq!(v["complete"], true);
+        assert_eq!(v["nodes"].as_array().unwrap().len(), 0);
+
+        // Force seeding without mutating node state: clean nodes have trust 1.0,
+        // so a threshold above 1.0 makes every node a seed. The whole (closed)
+        // dependency chain then reports complete with no omissions.
+        let r = handle(
+            &mut s,
+            &req(
+                5,
+                "tools/call",
+                json!({
+                    "name": "causal_flash",
+                    "arguments": {
+                        "include_low_trust_seeds": true,
+                        "trust_threshold": 1.5,
+                        "horizon": 4
+                    }
+                }),
+            ),
+        )
+        .unwrap();
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        let v: Value = serde_json::from_str(text).unwrap();
+        let nodes = v["nodes"].as_array().unwrap();
+        // Ingest builds file + symbol + import nodes, so the graph has more than
+        // three nodes; with the threshold above 1.0 every clean node seeds, so
+        // seed_count equals the node count and all roles are "seed".
+        assert!(
+            v["seed_count"].as_u64().unwrap() >= 3,
+            "chain seeded: {text}"
+        );
+        assert_eq!(v["seed_count"].as_u64().unwrap() as usize, nodes.len());
+        assert!(nodes.iter().all(|n| n["role"] == "seed"));
+        assert_eq!(v["complete"], true, "closed chain ⇒ complete");
+        assert_eq!(v["omitted"], 0);
+        let ids: Vec<&str> = nodes.iter().map(|n| n["node"].as_str().unwrap()).collect();
+        assert!(
+            ids.contains(&"file:src/db.rs")
+                && ids.contains(&"file:src/repo.rs")
+                && ids.contains(&"file:src/api.rs"),
+            "the cone covers the whole chain: {text}"
+        );
+    }
+
+    #[test]
+    fn recall_causal_flash_strategy_selects_the_cone_over_mcp() {
+        let mut s = AgentSession::new();
+        chain(&mut s); // api → repo → db
+
+        // The `recall` tool with the causal-flash strategy routes through
+        // session.recall (so the op is journaled and replay-exact) and the
+        // window assembler fits the token budget. trust_threshold > 1 seeds
+        // every clean node without mutating state, so the cone spans the chain.
+        let r = handle(
+            &mut s,
+            &req(
+                7,
+                "tools/call",
+                json!({
+                    "name": "recall",
+                    "arguments": {
+                        "strategy": "causal-flash",
+                        "include_low_trust_seeds": true,
+                        "trust_threshold": 1.5,
+                        "budget": 4096
+                    }
+                }),
+            ),
+        )
+        .unwrap();
+        let text = r["result"]["content"][0]["text"].as_str().unwrap();
+        let v: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(
+            v["strategy"], "causal-flash",
+            "window labels the strategy: {text}"
+        );
+        let uris: Vec<&str> = v["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|it| it["uri"].as_str().unwrap())
+            .collect();
+        assert!(
+            uris.iter().any(|u| u.starts_with("file:src/")),
+            "the cone recall selected chain nodes: {text}"
+        );
+    }
+
+    #[test]
     fn drift_cause_names_the_culprit_op_over_mcp() {
         let mut s = AgentSession::new();
         chain(&mut s);
@@ -1479,6 +1673,7 @@ mod tests {
         assert!(!mutating("causal_blame"));
         assert!(!mutating("drift_cause"));
         assert!(!mutating("retrodict_belief"));
+        assert!(!mutating("causal_flash"));
         // Non-tools/call messages never checkpoint.
         assert!(!is_mutating_call(&json!({ "method": "resources/read" })));
     }
