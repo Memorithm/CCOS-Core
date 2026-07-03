@@ -3,6 +3,10 @@ name = "ccos"
 version = "0.3.0"
 edition = "2021"
 license = "LicenseRef-CheckupAuto-Dual"
+# The `ccos` CLI is the primary binary. Declaring it here keeps a bare
+# `cargo run` (e.g. the CI smoke `cargo run --features llm -- version`)
+# unambiguous now that the workspace also ships the `ccos-migrate` tool.
+default-run = "ccos"
 
 [dependencies]
 # Async runtime + HTTP client are only needed by the LLM / eval / workspace
