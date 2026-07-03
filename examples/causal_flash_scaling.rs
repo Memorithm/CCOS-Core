@@ -8,8 +8,10 @@
 //! This example builds the SAME small local structure surrounded by increasing
 //! unrelated bulk and times four selections:
 //!   - `eigencentrality()`      — the iterated global signal the cone replaces;
-//!   - `get_node_scores()`      — a single-pass global baseline, for reference;
-//!   - `causal_flash_window()`  — the convenience cone (rebuilds the index: O(N+E));
+//!   - `causal_flash_window()`  — the convenience cone. The adjacency index is
+//!     now CACHED on the graph (rebuilt only when edges change), so this is
+//!     O(N + cone) amortized — the Working-seed scan plus a cone traversal, no
+//!     per-call edge re-index;
 //!   - `causal_flash_window_with()` — the HOT path (cached index + explicit
 //!     seed): O(cone), flat regardless of N.
 //!
@@ -69,8 +71,8 @@ fn main() {
     println!("Causal Flash vs global centrality — scaling with graph size");
     println!("(median of {reps} runs; deterministic construction, no RNG)\n");
     println!(
-        "{:>9}  {:>15}  {:>13}  {:>13}  {:>13}  {:>10}",
-        "nodes", "eigencentral µs", "conv. cone µs", "HOT cone µs", "cone_nodes", "hot vs eig"
+        "{:>9}  {:>15}  {:>14}  {:>13}  {:>12}  {:>10}",
+        "nodes", "eigencentral µs", "conv(cached) µs", "HOT cone µs", "cone_nodes", "hot vs eig"
     );
 
     let seeds = [NodeId("w".into())];
@@ -95,15 +97,16 @@ fn main() {
         );
 
         println!(
-            "{n:>9}  {eigen:>15.1}  {conv:>13.1}  {hot:>13.2}  {cone_nodes:>13}  {:>9.0}x",
+            "{n:>9}  {eigen:>15.1}  {conv:>14.1}  {hot:>13.2}  {cone_nodes:>12}  {:>9.0}x",
             eigen / hot.max(f64::MIN_POSITIVE)
         );
     }
 
     println!(
-        "\nThe HOT cone (cached index + explicit seed) is O(cone): flat and in the\n\
-         sub-microsecond range no matter the graph size, while the iterated\n\
-         eigenvector centrality it replaces grows with N. Both return the same\n\
-         constant-size, token-budgeted window."
+        "\nWith the adjacency index cached on the graph, the convenience path no\n\
+         longer re-indexes edges — it is O(N + cone) amortized (the Working-seed\n\
+         scan). The HOT path (cached index + explicit seed) is O(cone): flat, a\n\
+         few µs at any N, while the iterated eigenvector centrality it replaces\n\
+         grows with N. All paths return the same constant-size, budgeted window."
     );
 }

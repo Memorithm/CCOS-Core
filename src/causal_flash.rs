@@ -31,8 +31,10 @@
 //!
 //! Every step uses a total order on [`NodeId`]: seeds, frontier expansion, and
 //! the emitted summary are all sorted, so the output never depends on
-//! `HashMap` iteration order. The function is a pure read-only fold over the
-//! resident graph — nothing is stored, so snapshots are untouched and a replay
+//! `HashMap` iteration order. The window is a pure read-only fold over the
+//! resident graph. The adjacency index it uses is cached on the graph for speed
+//! but is **runtime-only** (`#[serde(skip)]`, keyed on `edges.len()`, rebuilt
+//! deterministically) — so snapshots stay byte-identical and a replay
 //! reproduces the same window byte-for-byte.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -180,17 +182,18 @@ impl MemoryGraph {
 
     /// Compute the [`CausalWindow`] for the current active frontier under `cfg`.
     ///
-    /// Convenience path: builds a fresh adjacency index and scans for the
-    /// `Working` seeds, so this is a **single `O(N + E)` pass** — versus the
+    /// The adjacency index is **cached on the graph** and rebuilt only when the
+    /// edge set changes, so across the ticks between edits this is
+    /// `O(N + cone)` — the `O(N)` `Working`-seed scan plus an `O(cone)` traversal
+    /// over the cached index, no per-call `O(E)` re-index. That already beats the
     /// `O(iterations · (N + E))` power iteration of the global eigenvector
-    /// centrality it replaces (the win is the iteration factor), plus a bounded,
-    /// token-budgeted OUTPUT whose size is invariant to `N`. On the hot path,
-    /// cache a [`CausalAdjacency`] and pass explicit seeds to
-    /// [`causal_flash_window_with`] for `O(cone)` per tick.
+    /// centrality it replaces, and returns a bounded, token-budgeted window whose
+    /// size is invariant to `N`. When the caller also tracks its own seed
+    /// frontier, [`causal_flash_window_with`] with an explicit seed list is a
+    /// full `O(cone)`.
     ///
     /// [`causal_flash_window_with`]: MemoryGraph::causal_flash_window_with
     pub fn causal_flash_window(&self, cfg: &CausalFlashConfig) -> CausalWindow {
-        let adj = self.causal_adjacency();
         // Seeds: Working nodes (∪ low-trust when enabled), never Orphan.
         let mut seeds: BTreeSet<NodeId> = BTreeSet::new();
         for (id, node) in self.node_entries() {
@@ -203,7 +206,7 @@ impl MemoryGraph {
                 seeds.insert(id.clone());
             }
         }
-        self.cone_core(cfg, &adj, seeds)
+        self.with_causal_adjacency(|adj| self.cone_core(cfg, adj, seeds))
     }
 
     /// The `O(cone)` hot path: reuse a cached [`CausalAdjacency`] and pass the
@@ -637,6 +640,58 @@ mod tests {
         assert_eq!(ids(&convenience), ids(&hot), "hot path == convenience path");
         assert_eq!(convenience.complete, hot.complete);
         assert_eq!(convenience.seed_count, hot.seed_count);
+    }
+
+    // The cached adjacency stays correct across edits: adding an edge changes
+    // edges.len(), so the next window sees the new dependency.
+    #[test]
+    fn cached_adjacency_invalidates_when_edges_change() {
+        let mut g = MemoryGraph::new(0.2, usize::MAX);
+        for id in ["w", "a", "b"] {
+            n(&mut g, id);
+        }
+        dep(&mut g, "w", "a");
+        g.set_node_state(&"w".into(), NodeState::Working);
+
+        let cfg = CausalFlashConfig {
+            include_callers: false,
+            ..Default::default()
+        };
+        let ids = |g: &MemoryGraph| -> Vec<String> {
+            let mut v: Vec<String> = g
+                .causal_flash_window(&cfg)
+                .nodes
+                .iter()
+                .map(|x| x.id.0.clone())
+                .collect();
+            v.sort();
+            v
+        };
+        // First call builds and caches the index.
+        assert_eq!(ids(&g), vec!["a", "w"]);
+        // A new dependency edge must be reflected (cache keyed on edges.len()).
+        dep(&mut g, "a", "b");
+        assert_eq!(ids(&g), vec!["a", "b", "w"], "cache picked up the new edge");
+    }
+
+    // The runtime cache is serde(skip): computing a window never changes the
+    // serialized snapshot, so `replay == live` and snapshot-hash invariants hold.
+    #[test]
+    fn window_computation_leaves_the_snapshot_byte_identical() {
+        let mut g = MemoryGraph::new(0.2, usize::MAX);
+        for id in ["w", "a"] {
+            n(&mut g, id);
+        }
+        dep(&mut g, "w", "a");
+        g.set_node_state(&"w".into(), NodeState::Working);
+
+        let before = serde_json::to_string(&g).unwrap();
+        let _ = g.causal_flash_window(&CausalFlashConfig::default());
+        let after = serde_json::to_string(&g).unwrap();
+        assert_eq!(
+            before, after,
+            "the adjacency cache must not enter the snapshot"
+        );
     }
 
     // Low-trust seeding brings a suspect node (and its cone) into view even when

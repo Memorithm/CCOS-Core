@@ -502,6 +502,16 @@ pub struct MemoryGraph {
     /// `w_centrality != 0` *and* `centrality_mode == Eigenvector`.
     #[serde(skip)]
     eigencentrality_cache: RefCell<EigenCentralityCache>,
+    /// Cached dependency adjacency for [`causal_flash_window`](Self::causal_flash_window),
+    /// keyed on `edges.len()` (edges are only appended or `retain`-pruned, so the
+    /// length changes whenever the edge set does — the same staleness proxy as
+    /// [`indegree_cache`](Self::indegree_cache)). Runtime-only, rebuilt lazily, so
+    /// a `Working`-rooted cone is `O(cone)`-amortized across the ticks between
+    /// edits instead of re-indexing every edge on every call. Not serialized ⇒
+    /// snapshots stay byte-identical and `replay == live` holds (the index is a
+    /// pure function of the resident edge set, rebuilt deterministically).
+    #[serde(skip)]
+    causal_adj_cache: RefCell<Option<(usize, crate::causal_flash::CausalAdjacency)>>,
     /// In-body call-sites awaiting resolution into `Calls` edges, keyed by source file →
     /// `(caller, callee, line)` in source order. Populated by the parser at ingest, consumed by
     /// [`resolve_symbol_calls`](Self::resolve_symbol_calls). **Runtime-only** (`serde(skip)`): the
@@ -774,6 +784,7 @@ impl MemoryGraph {
             cold_resident_budget: None,
             indegree_cache: RefCell::new(None),
             eigencentrality_cache: RefCell::new(None),
+            causal_adj_cache: RefCell::new(None),
             pending_calls: BTreeMap::new(),
             pending_data_refs: BTreeMap::new(),
             pending_aliases: BTreeMap::new(),
@@ -781,6 +792,22 @@ impl MemoryGraph {
             data_symbols: std::collections::BTreeSet::new(),
             edge_set: HashSet::new(),
         }
+    }
+
+    /// Run `f` with the graph's dependency-adjacency index, rebuilt only when the
+    /// edge set changed (keyed on `edges.len()`). This keeps
+    /// [`causal_flash_window`](Self::causal_flash_window) `O(cone)`-amortized —
+    /// no per-call `O(E)` re-index — while keeping the `RefCell` cache
+    /// encapsulated here. `pub(crate)` so the `causal_flash` module can drive it.
+    pub(crate) fn with_causal_adjacency<R>(
+        &self,
+        f: impl FnOnce(&crate::causal_flash::CausalAdjacency) -> R,
+    ) -> R {
+        let mut cache = self.causal_adj_cache.borrow_mut();
+        if cache.as_ref().map(|(k, _)| *k) != Some(self.edges.len()) {
+            *cache = Some((self.edges.len(), self.causal_adjacency()));
+        }
+        f(&cache.as_ref().unwrap().1)
     }
 
     /// The paging eviction floor, overridable by `CCOS_PAGING_THRESHOLD` (else `default`). The same
