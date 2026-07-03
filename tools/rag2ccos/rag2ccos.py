@@ -576,6 +576,219 @@ class QdrantAdapter(Adapter):
 
 
 # --------------------------------------------------------------------------- #
+#  Adapter: pgvector (PostgreSQL + the pgvector extension)                     #
+# --------------------------------------------------------------------------- #
+@register
+class PgvectorAdapter(Adapter):
+    name = "pgvector"
+    help = (
+        "A PostgreSQL/pgvector table. --in is the connection string (or set PGVECTOR_DSN); "
+        "map columns with --text-col / --id-col / --embedding-col. Needs psycopg or psycopg2."
+    )
+
+    def add_args(self, p: argparse.ArgumentParser) -> None:
+        p.add_argument("--table", required=True, help="table (or view) to read from")
+        p.add_argument("--text-col", default="content")
+        p.add_argument("--id-col", default="id")
+        p.add_argument("--source-col", default=None)
+        p.add_argument("--embedding-col", default="embedding")
+        p.add_argument("--extra-cols", default="",
+                       help="comma-separated columns to keep as metadata")
+        p.add_argument("--batch", type=int, default=1000)
+
+    def header(self, args: argparse.Namespace) -> BundleHeader:
+        return BundleHeader(source_system="pgvector", collection=args.table)
+
+    def _connect(self, dsn: str):
+        try:
+            import psycopg  # type: ignore
+
+            return psycopg.connect(dsn), "psycopg"
+        except ImportError:
+            try:
+                import psycopg2  # type: ignore
+
+                return psycopg2.connect(dsn), "psycopg2"
+            except ImportError:
+                raise SystemExit("pgvector adapter needs 'psycopg' (v3) or 'psycopg2' installed")
+
+    def records(self, args: argparse.Namespace) -> Iterator[Record]:
+        dsn = args.inp or os.environ.get("PGVECTOR_DSN")
+        if not dsn:
+            raise SystemExit("pgvector: pass --in <dsn> or set PGVECTOR_DSN")
+        extra = [c.strip() for c in args.extra_cols.split(",") if c.strip()]
+        cols = [args.id_col, args.text_col, args.embedding_col]
+        if args.source_col:
+            cols.append(args.source_col)
+        cols += extra
+        # Quote identifiers defensively; the column/table names come from the operator, not data.
+        sel = ", ".join('"{}"'.format(c.replace('"', '""')) for c in cols)
+        tbl = '"{}"'.format(args.table.replace('"', '""'))
+        conn, _drv = self._connect(dsn)
+        try:
+            cur = conn.cursor()
+            cur.execute(f"SELECT {sel} FROM {tbl}")
+            names = [d[0] for d in cur.description]
+            while True:
+                rows = cur.fetchmany(args.batch)
+                if not rows:
+                    break
+                for row in rows:
+                    d = dict(zip(names, row))
+                    text = d.get(args.text_col)
+                    if not text:
+                        continue
+                    emb = d.get(args.embedding_col)
+                    if isinstance(emb, str):  # pgvector renders as '[1,2,3]'
+                        emb = [float(x) for x in emb.strip("[]").split(",") if x.strip()]
+                    elif emb is not None:
+                        emb = [float(x) for x in emb]
+                    meta = {k: d[k] for k in extra}
+                    yield Record(
+                        id=str(d.get(args.id_col)),
+                        content=str(text),
+                        source_uri=str(d[args.source_col]) if args.source_col else None,
+                        metadata=meta,
+                        embedding=emb,
+                    )
+        finally:
+            conn.close()
+
+
+# --------------------------------------------------------------------------- #
+#  Adapter: Weaviate                                                          #
+# --------------------------------------------------------------------------- #
+@register
+class WeaviateAdapter(Adapter):
+    name = "weaviate"
+    help = (
+        "A Weaviate class/collection. --in is the URL (e.g. http://localhost:8080); "
+        "--class names the collection, --text-prop the text property. Needs weaviate-client."
+    )
+
+    def add_args(self, p: argparse.ArgumentParser) -> None:
+        p.add_argument("--class", dest="klass", required=True, help="Weaviate class/collection name")
+        p.add_argument("--text-prop", default="text")
+        p.add_argument("--batch", type=int, default=200)
+
+    def header(self, args: argparse.Namespace) -> BundleHeader:
+        return BundleHeader(source_system="weaviate", collection=args.klass)
+
+    def records(self, args: argparse.Namespace) -> Iterator[Record]:
+        try:
+            import weaviate  # type: ignore
+        except ImportError:
+            raise SystemExit("weaviate adapter needs 'weaviate-client' installed")
+        # Support both the v4 (connect_to_custom / collections) and v3 (Client) clients.
+        try:
+            client = weaviate.connect_to_local() if "localhost" in (args.inp or "") else \
+                weaviate.connect_to_custom(http_host=args.inp, http_port=443, http_secure=True,
+                                           grpc_host=args.inp, grpc_port=443, grpc_secure=True)
+            coll = client.collections.get(args.klass)
+            try:
+                for obj in coll.iterator(include_vector=True):
+                    props = obj.properties or {}
+                    text = props.get(args.text_prop)
+                    if not text:
+                        continue
+                    vec = obj.vector.get("default") if isinstance(obj.vector, dict) else obj.vector
+                    meta = {k: v for k, v in props.items() if k != args.text_prop}
+                    yield Record(
+                        id=str(obj.uuid),
+                        content=str(text),
+                        source_uri=meta.get("source"),
+                        metadata=meta,
+                        embedding=list(vec) if vec else None,
+                    )
+            finally:
+                client.close()
+        except AttributeError:
+            # v3 fallback: GraphQL cursor scan.
+            client = weaviate.Client(args.inp)
+            after = None
+            while True:
+                q = client.query.get(args.klass, [args.text_prop]) \
+                    .with_additional(["id", "vector"]).with_limit(args.batch)
+                if after:
+                    q = q.with_after(after)
+                res = q.do().get("data", {}).get("Get", {}).get(args.klass, [])
+                if not res:
+                    break
+                for obj in res:
+                    text = obj.get(args.text_prop)
+                    add = obj.get("_additional", {})
+                    after = add.get("id")
+                    if not text:
+                        continue
+                    meta = {k: v for k, v in obj.items() if k not in {args.text_prop, "_additional"}}
+                    yield Record(id=str(add.get("id")), content=str(text),
+                                 metadata=meta, embedding=add.get("vector"))
+
+
+# --------------------------------------------------------------------------- #
+#  Adapter: Pinecone                                                          #
+# --------------------------------------------------------------------------- #
+@register
+class PineconeAdapter(Adapter):
+    name = "pinecone"
+    help = (
+        "A Pinecone index. --in is the index name (API key from PINECONE_API_KEY); the text "
+        "must live in the vector metadata (--text-key). Needs pinecone(-client)."
+    )
+
+    def add_args(self, p: argparse.ArgumentParser) -> None:
+        p.add_argument("--namespace", default="")
+        p.add_argument("--text-key", default="text")
+        p.add_argument("--dim", type=int, default=None,
+                       help="index dimension (used only to page ids by a zero-vector query)")
+        p.add_argument("--top-k", type=int, default=1000)
+
+    def header(self, args: argparse.Namespace) -> BundleHeader:
+        return BundleHeader(source_system="pinecone", collection=args.inp)
+
+    def records(self, args: argparse.Namespace) -> Iterator[Record]:
+        api_key = os.environ.get("PINECONE_API_KEY")
+        if not api_key:
+            raise SystemExit("pinecone: set PINECONE_API_KEY")
+        try:
+            from pinecone import Pinecone  # type: ignore
+
+            index = Pinecone(api_key=api_key).Index(args.inp)
+        except ImportError:
+            raise SystemExit("pinecone adapter needs the 'pinecone' package installed")
+        # Pinecone has no full scan; page ids via list(), then fetch in batches.
+        seen: set[str] = set()
+        try:
+            for id_page in index.list(namespace=args.namespace):
+                ids = list(id_page)
+                if not ids:
+                    continue
+                fetched = index.fetch(ids=ids, namespace=args.namespace)
+                vectors = getattr(fetched, "vectors", None) or fetched.get("vectors", {})
+                for vid, v in vectors.items():
+                    if vid in seen:
+                        continue
+                    seen.add(vid)
+                    meta = (getattr(v, "metadata", None) or v.get("metadata") or {})
+                    text = meta.get(args.text_key)
+                    if not text:
+                        continue
+                    values = getattr(v, "values", None) or v.get("values")
+                    yield Record(
+                        id=str(vid),
+                        content=str(text),
+                        source_uri=meta.get("source"),
+                        metadata={k: val for k, val in meta.items() if k != args.text_key},
+                        embedding=list(values) if values else None,
+                    )
+        except (AttributeError, TypeError):
+            raise SystemExit(
+                "pinecone: this index/client does not support id listing; export via your own "
+                "query loop into the `jsonl` adapter instead"
+            )
+
+
+# --------------------------------------------------------------------------- #
 #  CLI                                                                          #
 # --------------------------------------------------------------------------- #
 def _run_adapter(adapter: Adapter, args: argparse.Namespace) -> int:

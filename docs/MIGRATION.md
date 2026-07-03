@@ -191,15 +191,20 @@ ccos-migrate --bundle <file.cmb.jsonl> [options]
   --report FILE           write the JSON migration report to FILE
   --dry-run               parse + import into an ephemeral memory + report; write nothing
   --no-verify             skip the per-node content-hash re-check (faster, unverified)
+  --extend                merge into the existing workspace at --path (incremental
+                          import — keeps its graph + hash-chained logs) instead of
+                          assembling a fresh one
   --json                  emit the report as JSON on stdout
 ```
 
 * **`--mode auto`** decides per record: a `code_file` kind (or a `source_uri`
   ending in a source extension) takes the code path; everything else is a
   document. Force it with `code` / `docs` for a homogeneous corpus.
-* Migration assembles a **fresh** workspace at `--path` (overwriting any file
-  there). The source RAG store is never touched, so a re-run is always safe —
-  and, being deterministic, byte-identical.
+* By default migration assembles a **fresh** workspace at `--path` (overwriting any
+  file there). With **`--extend`** it instead *merges* the bundle into the existing
+  workspace — keeping its causal graph, retained text and hash-chained logs — so you
+  can fold many stores (or many simulated sessions) into one memory incrementally.
+  The source RAG store is never touched, so a re-run is always safe.
 * Exit code is **non-zero** if the lossless check fails, so it drops into CI.
 
 **Outputs** (next to `--path`):
@@ -229,9 +234,37 @@ python tools/rag2ccos/rag2ccos.py list      # show adapters
 | `chroma` | a Chroma persist dir | needs `chromadb` |
 | `faiss` | a FAISS index + JSON docstore | `--index` also carries the vectors |
 | `qdrant` | a Qdrant URL + collection | needs `qdrant-client` |
+| `pgvector` | a PostgreSQL + pgvector table | `--table`; needs `psycopg`/`psycopg2` |
+| `weaviate` | a Weaviate class/collection | `--class`; needs `weaviate-client` |
+| `pinecone` | a Pinecone index | text in vector metadata; needs `pinecone` |
 
 Adding a store is a ~20-line adapter that yields `Record`s — the writer, hashing
 and schema are shared. See the module docstring.
+
+## Synthetic corpora — Qwen-AgentWorld (`worldsim`)
+
+The bundle is not only for *existing* stores: anything that can write CMB can feed
+CCOS. **[`tools/worldsim`](../tools/worldsim/README.md)** drives
+[Qwen-AgentWorld](https://github.com/QwenLM/Qwen-AgentWorld) — a language *world
+model* that simulates agentic environments (Terminal, SWE, OS, MCP) — as a
+**synthetic-session generator**, emitting one bundle per simulated trajectory:
+
+```bash
+export WORLD_MODEL_URL=http://localhost:8000/v1     # vLLM/SGLang serving the model
+export WORLD_MODEL_NAME=Qwen/Qwen-AgentWorld-35B-A3B
+python tools/worldsim/worldsim.py --domain terminal \
+    --task "find the largest file under /var/log" --actions pol.txt --out sess.cmb.jsonl
+ccos-migrate --bundle sess.cmb.jsonl --path fleet.ccos --extend   # accumulate a fleet
+```
+
+Each session becomes a `document` task node with one `chunk` per turn
+(`parent` = session, `ordinal` = turn) — so CCOS rebuilds the session's containment
+and turn-sequence edges. Paired with **`--extend`**, thousands of simulated
+sessions fold into one causal memory you can then stress with `ccos postmortem`,
+warm up RL against, or fuzz the MCP surface with — no real environment required.
+Everything is marked `simulated: true` (and `worldsim --offline` runs with no
+endpoint at all, for testing the pipeline). Prefer the Terminal / SWE / OS / MCP
+domains; the model card flags Search as weakest.
 
 ## Recall after migration
 

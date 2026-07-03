@@ -71,6 +71,12 @@ pub struct MigrateConfig {
     pub mode: Mode,
     /// Re-check every record's content hash after import (nodes present + text intact).
     pub verify: bool,
+    /// Incremental import: when `Some(path)`, **extend** the existing workspace at
+    /// `path` — its causal graph, retained sources and hash-chained logs are kept,
+    /// and the bundle's document nodes/edges + re-parsed code are merged on top —
+    /// instead of assembling a fresh workspace. (If the path does not yet exist it
+    /// is created empty, so extend degrades to a normal import.)
+    pub extend_from: Option<String>,
 }
 
 impl Default for MigrateConfig {
@@ -78,6 +84,7 @@ impl Default for MigrateConfig {
         Self {
             mode: Mode::Auto,
             verify: true,
+            extend_from: None,
         }
     }
 }
@@ -497,7 +504,50 @@ pub fn migrate_records(
     // ---- assemble the workspace ------------------------------------------- //
     // Load the hand-built document graph through the public snapshot format, then
     // re-parse any code records via the kernel's own ingestion path.
-    let mut mem = if report.nodes_documents > 0 {
+    let mut mem = if let Some(extend_path) = &cfg.extend_from {
+        // Incremental import: keep the existing workspace and merge the freshly-built
+        // document sub-graph (nodes + edges) and its retained sources on top of it,
+        // preserving the existing causal graph and its hash-chained logs. Done through
+        // the public snapshot format only (`to_json` → merge → `from_json`).
+        let existing = CcosMemory::open(extend_path)
+            .map_err(|e| MigrateError::Assemble(format!("open '{extend_path}': {e}")))?;
+        let ejson = existing
+            .to_json()
+            .map_err(|e| MigrateError::Assemble(e.to_string()))?;
+        let mut pv: serde_json::Value =
+            serde_json::from_str(&ejson).map_err(|e| MigrateError::Assemble(e.to_string()))?;
+        let mut base: MemoryGraph = serde_json::from_value(pv["graph"].clone())
+            .map_err(|e| MigrateError::Assemble(e.to_string()))?;
+        // Merge the new sub-graph's nodes then edges (edges need their endpoints to
+        // already exist — the graph enforces `edges ⊆ nodes × nodes`).
+        for id in graph.node_ids() {
+            if let Some(n) = graph.node(id) {
+                base.upsert_node(
+                    id.clone(),
+                    n.label.clone(),
+                    n.content.clone(),
+                    n.node_type.clone(),
+                );
+            }
+        }
+        for e in graph.edges() {
+            base.add_edge(
+                e.source.clone(),
+                e.target.clone(),
+                e.weight,
+                e.edge_type.clone(),
+            );
+        }
+        let mut base_sources: BTreeMap<String, String> =
+            serde_json::from_value(pv["sources"].take()).unwrap_or_default();
+        base_sources.extend(sources);
+        pv["graph"] =
+            serde_json::to_value(&base).map_err(|e| MigrateError::Assemble(e.to_string()))?;
+        pv["sources"] = serde_json::to_value(&base_sources)
+            .map_err(|e| MigrateError::Assemble(e.to_string()))?;
+        let json = serde_json::to_string(&pv).map_err(|e| MigrateError::Assemble(e.to_string()))?;
+        CcosMemory::from_json(&json).map_err(|e| MigrateError::Assemble(e.to_string()))?
+    } else if report.nodes_documents > 0 {
         let persisted = serde_json::json!({
             "graph": graph,
             "event_log": EventLog::new("ccos-migrate".to_string()),
@@ -676,5 +726,46 @@ mod tests {
         let bundle = "{not json}";
         let err = migrate_bundle(Cursor::new(bundle), &MigrateConfig::default());
         assert!(matches!(err, Err(MigrateError::Json { .. })));
+    }
+
+    #[test]
+    fn extend_merges_into_an_existing_workspace() {
+        let dir = std::env::temp_dir().join(format!("ccos-mig-extend-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ws = dir.join("ws.ccos");
+
+        // First import: one document → a fresh workspace, checkpointed to disk.
+        let mut m1 = migrate_bundle(
+            Cursor::new(r#"{"id":"a","content":"first doc alpha"}"#),
+            &MigrateConfig::default(),
+        )
+        .unwrap()
+        .memory;
+        m1.checkpoint_to(&ws).unwrap();
+
+        // Second import EXTENDS the same workspace with another document.
+        let cfg = MigrateConfig {
+            extend_from: Some(ws.to_string_lossy().into_owned()),
+            ..Default::default()
+        };
+        let out = migrate_bundle(
+            Cursor::new(r#"{"id":"b","content":"second doc beta"}"#),
+            &cfg,
+        )
+        .unwrap();
+
+        // Both the pre-existing node and the newly-added one are present.
+        assert!(
+            out.memory.graph().node(&NodeId("doc:a".into())).is_some(),
+            "existing node kept"
+        );
+        assert!(
+            out.memory.graph().node(&NodeId("doc:b".into())).is_some(),
+            "new node added"
+        );
+        assert!(out.report.lossless);
+        assert!(out.memory.verify().valid);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

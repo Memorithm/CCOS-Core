@@ -26,6 +26,7 @@ struct Opts {
     report: Option<String>,
     dry_run: bool,
     verify: bool,
+    extend: bool,
     json: bool,
 }
 
@@ -38,6 +39,7 @@ impl Opts {
             report: None,
             dry_run: false,
             verify: true,
+            extend: false,
             json: false,
         };
         let mut i = 0;
@@ -65,6 +67,7 @@ impl Opts {
                 }
                 "--dry-run" => o.dry_run = true,
                 "--no-verify" => o.verify = false,
+                "--extend" => o.extend = true,
                 "--json" => o.json = true,
                 "-h" | "--help" => {
                     print_help();
@@ -91,6 +94,8 @@ OPTIONS:\n\
     --report FILE           write the JSON migration report to FILE\n\
     --dry-run               parse + import in memory + report; write nothing\n\
     --no-verify             skip the per-node content-hash re-check\n\
+    --extend                merge into the existing workspace at --path instead of\n\
+    \x20                         overwriting it (incremental import; keeps its graph + logs)\n\
     --json                  emit the report as JSON on stdout\n\
     -h, --help              show this help\n\n\
 Produce a bundle from any RAG store with tools/rag2ccos. See docs/MIGRATION.md."
@@ -121,6 +126,12 @@ fn main() -> ExitCode {
     let cfg = MigrateConfig {
         mode: opts.mode,
         verify: opts.verify,
+        // `--extend` merges into the workspace at --path; otherwise a fresh one is built.
+        extend_from: if opts.extend {
+            Some(opts.path.clone())
+        } else {
+            None
+        },
     };
     let outcome = match migrate::migrate_bundle(reader, &cfg) {
         Ok(o) => o,
