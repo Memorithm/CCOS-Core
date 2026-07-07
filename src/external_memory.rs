@@ -902,6 +902,19 @@ impl CcosMemory {
         self.sources.get(&format!("file:{uri}")).map(String::as_str) == Some(clean.as_ref())
     }
 
+    /// Whole-file source for an ingested uri, looked up the same way recall
+    /// builds `RecallItem::content` but returning the full file (not a granular
+    /// node span). The `ccos.get` MCP tool uses this so a host can read a file by
+    /// path without re-running a recall. Accepts `file:src/db.rs` or `src/db.rs`.
+    pub fn source_for(&self, uri: &str) -> Option<&str> {
+        let key = if uri.starts_with("file:") {
+            uri.to_string()
+        } else {
+            format!("file:{uri}")
+        };
+        self.sources.get(&key).map(String::as_str)
+    }
+
     fn write_to(&self, p: &Path) -> Result<(), MemoryError> {
         crate::util::write_durable(p, self.to_json()?.as_bytes())?;
         Ok(())
