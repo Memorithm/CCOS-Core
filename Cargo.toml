@@ -77,7 +77,7 @@ ccos-memory-runtime = { path = "crates/ccos-memory-runtime", optional = true }
 # `neural-embed`). Pinned to a reviewed release tag (the lockfile records the
 # resolved commit, so a moved tag cannot slip through `--locked` builds); behind
 # the `octasoma` feature so the default build is byte-identical. See `src/octa_index.rs`.
-octasoma = { git = "https://github.com/CHECKUPAUTO/octasoma", tag = "v0.4.0", optional = true }
+octasoma = { git = "https://github.com/Memorithm/octasoma", tag = "v0.4.0", optional = true }
 
 [features]
 # Default = the **sync core** (causal memory, hash-chained event log, recall) plus
