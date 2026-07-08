@@ -1834,6 +1834,9 @@ fn apply_op(m: &mut CcosMemory, op: &Op, dirty: &mut bool) {
 /// The signing-key sidecar path for a workspace: `<path>.key` (64 hex chars —
 /// the raw 32-byte ed25519 seed). Lives NEXT to the state, never inside the
 /// timeline sidecar, so sharing an `.oplog` or a bundle can never leak it.
+// Reached by `load_signing_seed` only on `signed-sync` builds (and by tests on
+// every build); the allow keeps the crypto-free default build warning-free.
+#[cfg_attr(not(feature = "signed-sync"), allow(dead_code))]
 fn key_sidecar(path: &Path) -> PathBuf {
     let mut s = path.as_os_str().to_os_string();
     s.push(".key");
