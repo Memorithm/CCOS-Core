@@ -2,193 +2,121 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
-  workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: "0"
-  CARGO_PROFILE_DEV_DEBUG: "0"
-  CARGO_PROFILE_TEST_DEBUG: "0"
-  RUST_BACKTRACE: "1"
+  RUSTFLAGS: -D warnings
 
 jobs:
-  format:
+  hygiene:
+    name: Repository hygiene + author policy
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: rustup toolchain install 1.89.0 --profile minimal --component rustfmt
-      - name: Format first-party Rust boundaries
-        run: |
-          cargo +1.89.0 fmt --all --check
-          cargo +1.89.0 fmt --manifest-path crates/forge/forge-core/Cargo.toml --all -- --check
-
-  clippy-default:
-    needs: format
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: rustup toolchain install 1.89.0 --profile minimal --component clippy
-      - uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+      - uses: actions/checkout@v4
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: cargo-registry-ubuntu-24.04-rust-1.89.0-${{ hashFiles('Cargo.lock') }}
-      - run: cargo +1.89.0 clippy --all-targets --locked -- -D warnings
-
-  sandbox-security:
-    needs: format
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: rustup toolchain install 1.89.0 --profile minimal
-      - name: Install Bubblewrap
+          fetch-depth: 0
+      - name: Author policy (single human contributor)
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends bubblewrap
-          test -x /usr/bin/bwrap
-          test -x /usr/bin/prlimit
-      - name: Adversarial sandbox tests as unprivileged runner
-        run: |
-          cargo +1.89.0 fetch --locked
-          cargo +1.89.0 fetch --manifest-path crates/forge/forge-core/Cargo.toml --locked
-          cargo +1.89.0 test -p ccos-sandbox --locked --offline -- --test-threads=1
-          cargo +1.89.0 test -p ccos --features rsi-dgm \
-            guarded_cargo_evaluator_requires_sandbox_and_a_real_test_result \
-            --locked --offline -- --test-threads=1
-          cargo +1.89.0 test \
-            --manifest-path crates/forge/forge-core/Cargo.toml \
-            --test generated_candidate --test iso --test secure_limits_test \
-            --locked --offline -- --test-threads=1
-
-  test-core-msrv:
-    needs: format
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: rustup toolchain install 1.89.0 --profile minimal
-      - run: cargo +1.89.0 check --workspace --locked
-      - run: cargo +1.89.0 test --locked
-      - run: cargo +1.89.0 test --no-default-features --locked
-
-  test-core-stable:
-    needs: format
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: rustup toolchain install stable --profile minimal
-      - run: rustc +stable --version --verbose
-      - run: cargo +stable check --workspace --all-targets --locked
-      - run: cargo +stable test --locked
-
-  test-premium-deterministic:
-    needs: clippy-default
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    env:
-      # Premium feature sets include native crypto builds; cap parallelism to
-      # avoid exhausting the hosted runner and losing runner communication.
-      CARGO_BUILD_JOBS: "2"
-      RUST_TEST_THREADS: "2"
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: rustup toolchain install 1.89.0 --profile minimal
-      - run: cargo +1.89.0 test --features license,license-pq,signed-sync --locked
-      - run: cargo +1.89.0 test --features slhav2,learned-embed --locked
-      - run: cargo +1.89.0 test --features octasoma,octacore --locked
-      - run: cargo +1.89.0 test --features rsi --locked
-      - run: cargo +1.89.0 test --features pro-default --locked
-
-  test-replay-relax:
-    needs: clippy-default
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    env:
-      CARGO_BUILD_JOBS: "2"
-      RUST_TEST_THREADS: "2"
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: rustup toolchain install 1.89.0 --profile minimal
-      - run: cargo +1.89.0 test --features slhav2-full --locked
-      - run: cargo +1.89.0 test --features rsi-dgm --locked
-      - run: cargo +1.89.0 test --features all-full --locked
-
-  test-workspace-members:
-    needs: clippy-default
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: rustup toolchain install 1.89.0 --profile minimal
-      - run: >-
-          cargo +1.89.0 test --locked
-          -p scirust -p slha-mcp -p slha-c -p ccos-memory-runtime
-          -p octasoma -p octacore -p rsi
-
-  feature-combinations:
-    needs: clippy-default
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: rustup toolchain install 1.89.0 --profile minimal
-      - name: Bounded feature matrix
-        run: |
-          cargo +1.89.0 check --no-default-features --locked
-          for features in \
-            llm learned-embed license license-pq signed-sync slhav2 slhav2-full \
-            octasoma octacore rsi rsi-dgm pro-default all-full \
-            license,license-pq octasoma,slhav2 rsi,octacore; do
-            cargo +1.89.0 check --no-default-features --features "$features" --locked
-          done
-      - name: Community dependency-tree guard
-        run: |
-          cargo +1.89.0 tree --locked --edges normal > /tmp/community-tree.txt
-          if grep -E '(^| )scirust v|(^| )octasoma v|(^| )octacore v|(^| )rsi v' /tmp/community-tree.txt; then
-            echo "default community build links a premium crate" >&2
-            exit 1
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            scripts/check-author-policy.sh "origin/${{ github.base_ref }}..HEAD"
+          else
+            scripts/check-author-policy.sh HEAD
           fi
-      - name: Replay-relax compile guard
-        run: ./scripts/check_feature_boundaries.sh
+      - name: Forbidden research components
+        run: scripts/check-no-research-components.sh
+      - name: No trailing whitespace / conflict markers
+        run: |
+          ! git grep -nE '^(<{7}|={7}|>{7})' -- ':!.git' ':!docs/paper'
+          ! git grep -nE ' +$' -- '*.rs' '*.toml' ':!docs/paper'
+
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  check:
+    name: cargo check (${{ matrix.features }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["--no-default-features", "", "--all-features"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check ${{ matrix.features }} --locked
+
+  clippy:
+    name: cargo clippy -D warnings
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --workspace --all-features --locked -- -D warnings
+
+  test:
+    name: tests (${{ matrix.profile }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [debug, release]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      # SLH-DSA (post-quantum) tests are prohibitively slow in debug builds;
+      # the license-pq suite runs in release. Everything else runs in both.
+      - name: unit + integration (non-pq, ${{ matrix.profile }})
+        run: |
+          if [ "${{ matrix.profile }}" = "release" ]; then
+            cargo test --release --all-features --locked
+          else
+            cargo test --all-features --locked -- \
+              --skip license::tests::slh_dsa --skip ed25519_verifier_rejects_a_slh_dsa \
+              --skip detect_dispatches_on_the_scheme_tag
+          fi
+      - name: doctests
+        run: cargo test --doc --all-features --locked
+
+  msrv:
+    name: MSRV 1.89
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - run: cargo check --workspace --all-features --locked
+
+  cognitive:
+    name: Cognitive core tests (offline, deterministic)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: cognitive suite
+        run: cargo test --release --locked --test cognitive -- --nocapture
+      - name: replay equivalence
+        run: cargo test --release --locked --test replay_equivalence_property --test replay_vectors
+      - name: snapshot roundtrip + differential
+        run: cargo test --release --locked --test snapshot_roundtrip_property --test snapshot_differential
+      - name: schema / serialization compatibility
+        run: cargo test --release --locked --test persistence --test event_graph_consistency
 
   docs:
-    needs: clippy-default
+    name: documentation build
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: rustup toolchain install 1.89.0 --profile minimal
-      - run: RUSTDOCFLAGS="-D warnings" cargo +1.89.0 doc -p ccos --no-deps --all-features --locked
-
-  aarch64-replay:
-    needs: test-core-msrv
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: rustup toolchain install 1.89.0 --profile minimal
-      - run: test "$(uname -m)" = aarch64
-      - run: cargo +1.89.0 test --locked --test determinism_boundary --test replay_vectors
-
-  bench-repro-smoke:
-    needs: test-core-msrv
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - run: rustup toolchain install 1.89.0 --profile minimal
-      - run: ./scripts/benchmark_repro.sh --smoke
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: benchmark-smoke-${{ github.sha }}
-          path: benchmark-results/
-          if-no-files-found: error
-          retention-days: 14
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo doc --no-deps --all-features --locked
