@@ -23,6 +23,38 @@
 
 use std::fmt;
 
+include!(concat!(env!("OUT_DIR"), "/license_build_keys.rs"));
+
+/// Current signed-license token format.
+pub const LICENSE_TOKEN_VERSION: u32 = 1;
+/// Hard input bound applied before UTF-8, base64, JSON, or signature parsing.
+pub const MAX_LICENSE_TOKEN_BYTES: usize = 64 * 1024;
+#[cfg(any(feature = "license", feature = "license-pq"))]
+const MAX_LICENSE_PAYLOAD_BYTES: usize = 8 * 1024;
+/// Hard limit for a signed offline revocation list.
+pub const MAX_REVOCATION_LIST_BYTES: usize = 1024 * 1024;
+/// Current signed revocation-list payload version.
+pub const REVOCATION_LIST_VERSION: u32 = 1;
+#[cfg(any(feature = "license", feature = "license-pq"))]
+const MAX_REVOCATION_ENTRIES: usize = 10_000;
+const ED25519_ALGORITHM: &str = "ed25519";
+const SLH_DSA_ALGORITHM: &str = "slh-dsa-shake-128s";
+
+/// Build-time public-key provenance. This is deliberately public metadata: a
+/// verification key is not secret, but its origin must be unambiguous.
+pub fn license_build_profile() -> &'static str {
+    LICENSE_BUILD_PROFILE
+}
+
+/// Key identifiers embedded by `CCOS_LICENSE_PUBLIC_KEYS_FILE` at build time.
+pub fn embedded_license_key_ids() -> Vec<&'static str> {
+    EMBEDDED_ED25519_KEYS
+        .iter()
+        .chain(EMBEDDED_SLH_DSA_KEYS.iter())
+        .map(|(kid, _)| *kid)
+        .collect()
+}
+
 /// A licensed (*Pro*) capability. The **core** of CCOS is never one of these — only advanced,
 /// operator-facing tooling is gated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,12 +133,23 @@ pub struct License {
     pub licensee: String,
     /// Expiry in unix seconds; `None` = perpetual.
     pub expires_at: Option<u64>,
+    /// Host machine fingerprint; `None` = unlocked (runs on any host).
+    pub machine: Option<String>,
 }
 
 impl License {
     /// Whether the license is still in force at `now` (unix seconds).
     pub fn is_valid_at(&self, now: u64) -> bool {
         self.expires_at.is_none_or(|e| now <= e)
+    }
+    /// Whether the license is bound to the given host fingerprint.
+    /// An unbound license (`machine` is `None`) matches any host.
+    pub fn machine_ok(&self, host_fp: Option<&str>) -> bool {
+        match (&self.machine, host_fp) {
+            (None, _) => true,
+            (Some(bound), Some(host)) => bound == host,
+            (Some(_), None) => false,
+        }
     }
 }
 
@@ -185,6 +228,9 @@ struct TokenPayload {
     /// Expiry, unix seconds. Absent = perpetual.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exp: Option<u64>,
+    /// Host machine fingerprint; `None` = unlocked (runs on any host).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    machine: Option<String>,
 }
 
 /// URL-safe base64 **without padding** (RFC 4648 §5: `-`/`_`, no `=`). Hand-rolled so neither license
@@ -254,6 +300,7 @@ pub fn sign_token(signing_seed: &[u8; 32], licensee: &str, exp: Option<u64>) -> 
     let payload = TokenPayload {
         licensee: licensee.to_string(),
         exp,
+        machine: None,
     };
     let json = serde_json::to_vec(&payload).expect("payload serialises");
     let signing_input = b64url_encode(&json);
@@ -333,6 +380,7 @@ impl LicenseVerifier for Ed25519Verifier {
         Ok(License {
             licensee: payload.licensee,
             expires_at: payload.exp,
+            machine: payload.machine,
         })
     }
 }
@@ -393,6 +441,7 @@ pub fn sign_token_slhdsa(signing_sk: &[u8; 64], licensee: &str, exp: Option<u64>
     let payload = TokenPayload {
         licensee: licensee.to_string(),
         exp,
+        machine: None,
     };
     let json = serde_json::to_vec(&payload).expect("payload serialises");
     let payload_b64 = b64url_encode(&json);
@@ -477,6 +526,7 @@ impl LicenseVerifier for SlhDsaVerifier {
         Ok(License {
             licensee: payload.licensee,
             expires_at: payload.exp,
+            machine: payload.machine,
         })
     }
 }
@@ -561,6 +611,46 @@ pub fn compiled_verifier_scheme() -> &'static str {
         (false, true) => "ed25519",
         (false, false) => "none",
     }
+}
+
+/// Resolve the license file path: `$CCOS_LICENSE_FILE` when set, else
+/// `$XDG_CONFIG_HOME/ccos/license` (or `$HOME/.config/ccos/license`).
+pub fn license_install_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("CCOS_LICENSE_FILE")
+        .map(std::path::PathBuf::from)
+        .or_else(default_license_path)
+}
+
+/// Parse, dispatch by scheme tag, and verify a license blob: `slhdsa.`-prefixed
+/// tokens go through the SLH-DSA verifier (`license-pq`); everything else goes
+/// through the ed25519 verifier (`license`). Returns a verified [`License`] on
+/// success, or a [`LicenseError`] explaining the refusal.
+pub fn verify_token_blob(blob: &[u8], now: u64) -> Result<License, LicenseError> {
+    if blob.len() > MAX_LICENSE_TOKEN_BYTES {
+        return Err(LicenseError::Invalid("token exceeds 64 KiB limit".into()));
+    }
+    let token = std::str::from_utf8(blob)
+        .map_err(|_| LicenseError::Invalid("token is not UTF-8".into()))?
+        .trim();
+    let algorithm = if let Some(rest) = token.strip_prefix("ccoslic1.") {
+        rest.split('.').next().unwrap_or_default()
+    } else if token.starts_with("slhdsa.") {
+        SLH_DSA_ALGORITHM
+    } else {
+        ED25519_ALGORITHM
+    };
+    #[cfg(feature = "license-pq")]
+    if algorithm == SLH_DSA_ALGORITHM {
+        return SlhDsaVerifier::new().verify(blob, now);
+    }
+    #[cfg(feature = "license")]
+    if algorithm == ED25519_ALGORITHM {
+        return Ed25519Verifier::new().verify(blob, now);
+    }
+    let _ = (blob, now);
+    Err(LicenseError::Invalid(format!(
+        "unknown or unavailable license algorithm: {algorithm}"
+    )))
 }
 
 impl Licensing {
@@ -680,6 +770,7 @@ mod tests {
         License {
             licensee: "acme-corp".to_string(),
             expires_at,
+            machine: None,
         }
     }
 

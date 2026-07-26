@@ -107,6 +107,7 @@ async fn main() {
         "memory" => run_memory_cmd(rest),
         "stdin" => run_stdin_cmd(rest),
         "doctor" => run_doctor(&DoctorOpts::parse(rest)),
+        "setup" => run_setup(&SetupOpts::parse(rest)),
         "license" => run_license(rest),
         "tensions" => run_tensions(&TensionsOpts::parse(rest)),
         "audit" => run_audit(&AuditOpts::parse(rest)),
@@ -132,6 +133,7 @@ async fn main() {
         "agents" => from_code(commands_runtime::run_agents(rest).await),
         "benchmark" => from_code(commands_runtime::run_benchmark(rest)),
         "runtime" => from_code(commands_runtime::run_runtime(rest).await),
+
         other => {
             eprintln!("ccos: unknown command '{other}'\n");
             print_help();
@@ -181,6 +183,8 @@ fn run_doctor(opts: &DoctorOpts) -> CliResult {
     let f_syn = cfg!(feature = "syn-parser");
     let f_learned = cfg!(feature = "learned-embed");
     let f_mimalloc = cfg!(feature = "mimalloc");
+    let f_slhav2 = cfg!(feature = "slhav2");
+    let f_octasoma = cfg!(feature = "octasoma");
     let pq_key_set = ccos::license::embedded_slh_dsa_key_is_set();
     let any_verifier = f_license || f_license_pq;
     let any_key_set = key_set || pq_key_set;
@@ -231,6 +235,8 @@ fn run_doctor(opts: &DoctorOpts) -> CliResult {
             "features": {
                 "llm": f_llm, "license": f_license, "license-pq": f_license_pq,
                 "syn-parser": f_syn, "learned-embed": f_learned, "mimalloc": f_mimalloc,
+                "slhav2": f_slhav2,
+                "octasoma": f_octasoma,
             },
             "parser": if f_syn { "syn-ast" } else { "line-heuristic" },
             "license": {
@@ -336,6 +342,309 @@ fn run_doctor(opts: &DoctorOpts) -> CliResult {
         );
     }
     Ok(())
+}
+
+/// Options for `ccos setup`.
+struct SetupOpts {
+    /// Project directory whose `.mcp.json` (and default report) setup targets.
+    dir: PathBuf,
+    /// Apply the wiring without an interactive confirmation.
+    yes: bool,
+    /// Show the plan and run the battery, but write nothing.
+    dry_run: bool,
+    /// Emit the sealed report JSON on stdout instead of the human summary.
+    json: bool,
+    /// Also print the Mode B (PostToolUse hook) snippet for manual wiring.
+    hook: bool,
+    /// Report destination (default `<dir>/setup_report.json`).
+    report: Option<PathBuf>,
+    /// Workspace path the registered MCP server will persist to.
+    workspace: String,
+}
+
+impl SetupOpts {
+    fn parse(args: &[String]) -> Self {
+        let mut o = Self {
+            dir: PathBuf::from("."),
+            yes: false,
+            dry_run: false,
+            json: false,
+            hook: false,
+            report: None,
+            workspace: "workspace.ccos".to_string(),
+        };
+        let mut i = 0;
+        while i < args.len() {
+            match args[i].as_str() {
+                "--yes" | "-y" => o.yes = true,
+                "--dry-run" => o.dry_run = true,
+                "--json" => o.json = true,
+                "--hook" => o.hook = true,
+                "--dir" => {
+                    i += 1;
+                    if let Some(v) = args.get(i) {
+                        o.dir = PathBuf::from(v);
+                    }
+                }
+                "--report" => {
+                    i += 1;
+                    if let Some(v) = args.get(i) {
+                        o.report = Some(PathBuf::from(v));
+                    }
+                }
+                "--workspace" => {
+                    i += 1;
+                    if let Some(v) = args.get(i) {
+                        o.workspace = v.clone();
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        o
+    }
+}
+
+/// Ask for an interactive yes/no. Fail-closed: a non-interactive stdin, a read
+/// error, or anything but an explicit `y`/`yes` all mean **no**.
+fn confirm(prompt: &str) -> bool {
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        return false;
+    }
+    print!("{prompt} [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return false;
+    }
+    matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// `ccos setup [--yes] [--dry-run] [--json] [--hook] [--dir D] [--report F] [--workspace W]`
+/// — the one-command install-and-verify pass (see `docs/SETUP.md` and `ccos::setup`):
+/// probe the host, register the MCP server in the project's `.mcp.json`
+/// (idempotent, consent-gated, fail-closed on anything unparseable), run the
+/// deterministic first-run self-test battery, and seal the verdict into
+/// `setup_report.json` — the artifact an MCP agent relays via `ccos://setup/report`.
+/// Exits 0 only when every check passed.
+fn run_setup(opts: &SetupOpts) -> CliResult {
+    use ccos::setup::{self, ActionStatus, McpWiring, OllamaProbe, SetupReport, WiringAction};
+
+    let probe = setup::probe(&opts.dir);
+    let quiet = opts.json;
+    let yn = |b: bool| if b { "yes" } else { "no" };
+
+    if !quiet {
+        println!("ccos setup — install, wire, self-test\n");
+        println!("  host");
+        println!(
+            "    target       {}-{} ({} build)",
+            probe.arch,
+            probe.os,
+            if probe.release_build {
+                "release"
+            } else {
+                "debug ⚠"
+            }
+        );
+        println!("    license      {}", probe.license_tier);
+        if let (Some(path), Some(sha)) = (&probe.binary_path, &probe.binary_sha256) {
+            println!("    binary       {path} (sha256 {}…)", &sha[..12]);
+        }
+        println!("  agent host");
+        match &probe.mcp_json {
+            McpWiring::Wired {
+                command,
+                command_exists,
+            } => println!(
+                "    .mcp.json    wired → {command}{}",
+                if *command_exists {
+                    ""
+                } else {
+                    "  ⚠ command not found on this host"
+                }
+            ),
+            McpWiring::PresentUnwired => println!("    .mcp.json    present, no ccos entry"),
+            McpWiring::Missing => println!("    .mcp.json    missing"),
+            McpWiring::Invalid { error } => {
+                println!("    .mcp.json    ⚠ unparseable ({error}) — setup will not touch it")
+            }
+        }
+        println!("    hook (B)     wired={}", yn(probe.hook_wired));
+        match &probe.ollama {
+            OllamaProbe::Reachable { endpoint } => {
+                println!("    ollama       reachable ({endpoint})")
+            }
+            OllamaProbe::Unreachable { endpoint } => {
+                println!(
+                    "    ollama       not running ({endpoint}) — optional, nothing requires it"
+                )
+            }
+            OllamaProbe::RefusedByEgress { endpoint, reason } => {
+                println!("    ollama       probe refused by egress policy ({endpoint}): {reason}")
+            }
+        }
+        println!(
+            "    workspace    {}",
+            if probe.workspace_present {
+                "workspace.ccos present"
+            } else {
+                "none yet (created on first MCP write)"
+            }
+        );
+    }
+
+    // ── Wiring (consent-gated, idempotent, fail-closed) ─────────────
+    let mcp_path = opts.dir.join(".mcp.json");
+    let command = probe
+        .binary_path
+        .clone()
+        .unwrap_or_else(|| "ccos".to_string());
+    let mut actions: Vec<WiringAction> = Vec::new();
+    match &probe.mcp_json {
+        McpWiring::Wired { .. } => actions.push(WiringAction {
+            path: mcp_path.display().to_string(),
+            status: ActionStatus::AlreadyWired,
+            summary: "ccos MCP server already registered — nothing to do".into(),
+        }),
+        McpWiring::Invalid { error } => actions.push(WiringAction {
+            path: mcp_path.display().to_string(),
+            status: ActionStatus::Failed,
+            summary: format!("refused: existing .mcp.json is unparseable ({error})"),
+        }),
+        McpWiring::Missing | McpWiring::PresentUnwired => {
+            let plan = format!(
+                "register MCP server `ccos mcp {}` (command {command}) in {}",
+                opts.workspace,
+                mcp_path.display()
+            );
+            if opts.dry_run {
+                if !quiet {
+                    println!("\n  plan (dry-run, not written)\n    - {plan}");
+                }
+                actions.push(WiringAction {
+                    path: mcp_path.display().to_string(),
+                    status: ActionStatus::SkippedDryRun,
+                    summary: plan,
+                });
+            } else {
+                let consent = opts.yes || {
+                    if !quiet {
+                        println!("\n  plan\n    - {plan}");
+                    }
+                    confirm("  apply?")
+                };
+                if consent {
+                    match setup::wire_mcp_json(&mcp_path, &command, &opts.workspace) {
+                        Ok(summary) => actions.push(WiringAction {
+                            path: mcp_path.display().to_string(),
+                            status: ActionStatus::Applied,
+                            summary,
+                        }),
+                        Err(e) => actions.push(WiringAction {
+                            path: mcp_path.display().to_string(),
+                            status: ActionStatus::Failed,
+                            summary: format!("write failed: {e}"),
+                        }),
+                    }
+                } else {
+                    actions.push(WiringAction {
+                        path: mcp_path.display().to_string(),
+                        status: ActionStatus::SkippedNoConsent,
+                        summary: format!("{plan} — skipped (no consent; re-run with --yes)"),
+                    });
+                }
+            }
+        }
+    }
+    if !quiet {
+        println!("\n  wiring");
+        for a in &actions {
+            let mark = match a.status {
+                ActionStatus::Applied | ActionStatus::AlreadyWired => "✓",
+                ActionStatus::SkippedDryRun | ActionStatus::SkippedNoConsent => "•",
+                ActionStatus::Failed => "✗",
+            };
+            println!("    {mark} {}", a.summary);
+        }
+        // One writer per workspace (docs/SELF_ANALYSIS.md): the Mode B hook and
+        // the live MCP server must not both write the same workspace.ccos.
+        if probe.hook_wired {
+            println!(
+                "    ⚠ the Mode B feed hook is already wired — keep ONE writer per \
+                 workspace: don't let agents call mutating ccos tools on the same \
+                 workspace the hook feeds (docs/SELF_ANALYSIS.md)"
+            );
+        }
+    }
+    if opts.hook && !quiet {
+        println!(
+            "\n  Mode B hook (manual wiring — setup never edits agent settings itself):\n\
+             \x20   add to .claude/settings.json, then pick ONE writer per workspace:\n{}",
+            ccos::setup::hook_snippet()
+        );
+    }
+
+    // ── The deterministic first-run battery ─────────────────────────
+    if !quiet {
+        println!("\n  self-test (deterministic first-run battery)");
+    }
+    let tests = setup::run_self_test();
+    if !quiet {
+        for t in &tests {
+            println!(
+                "    {} {:<24} {}",
+                if t.passed { "✓" } else { "✗" },
+                t.name,
+                t.detail
+            );
+        }
+    }
+
+    // ── Seal and write the verdict ──────────────────────────────────
+    let report = SetupReport::seal(probe, actions, tests);
+    let report_file = opts
+        .report
+        .clone()
+        .unwrap_or_else(|| opts.dir.join(setup::REPORT_DEFAULT));
+    if !opts.dry_run {
+        report
+            .write_to(&report_file)
+            .map_err(|e| CliError::fail(format!("ccos setup: writing the report: {e}")))?;
+    }
+    if opts.json {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap());
+    } else {
+        if !opts.dry_run {
+            println!(
+                "\n  report → {} (sha256 {}…)",
+                report_file.display(),
+                &report.report_sha256[..12]
+            );
+        } else {
+            println!("\n  report not written (dry-run)");
+        }
+        if report.ok {
+            println!(
+                "\n  ✓ setup complete — {}/{} checks passed. An MCP agent reads this \
+                 verdict at ccos://setup/report and relays it; the report file is \
+                 the source of truth.",
+                report.tests_passed, report.tests_total
+            );
+        } else {
+            println!(
+                "\n  ✗ setup NOT certified — {}/{} checks passed; see the report above.",
+                report.tests_passed, report.tests_total
+            );
+        }
+    }
+    if report.ok {
+        Ok(())
+    } else {
+        Err(CliError::status(1))
+    }
 }
 
 /// `ccos license` — report the active licensing tier (community / Pro), the licensee and expiry, and
@@ -2960,6 +3269,29 @@ COMMANDS:\n\
     \x20                          literals + a forensic injection score; reads\n\
     \x20                          stdin when no path. --strict exits non-zero on danger\n\
 \n\
+  Deployment:\n\
+    doctor [--json]            Deployment self-check: build profile, features,\n\
+    \x20                          parser, license status, actionable warnings\n\
+    setup [flags]              One-command install pass: probe the host, wire the\n\
+    \x20                          MCP server into .mcp.json (consent-gated), run the\n\
+    \x20                          first-run self-test battery, seal setup_report.json\n\
+        --yes                  Apply the wiring without an interactive prompt\n\
+        --dry-run              Show the plan + run the battery; write nothing\n\
+        --json                 Emit the sealed report JSON instead of the summary\n\
+        --hook                 Also print the Mode B feed-hook snippet (manual wiring)\n\
+        --dir <D>              Project directory (default .)\n\
+        --report <F>           Report path (default <dir>/setup_report.json)\n\
+        --workspace <W>        Workspace the MCP server persists (default workspace.ccos)\n\
+    license                    Show the active tier (community / PRO) and the Pro feature set\n\
+    license claim <CODE> --from <URL>  Redeem a one-time claim code against the vendor's\n\
+    \x20                          counter and install the single-seat license (sends only\n\
+    \x20                          hashes; token verified locally before install)\n\
+    license fingerprint        Print this machine's opaque fingerprint (for the\n\
+    \x20                          counter's web-form claim flow)\n\
+    update --from <URL>        Fetch the vendor's signed release manifest, verify it\n\
+    \x20                          against the baked-in key, enforce the license for Pro\n\
+    \x20                          artifacts, hash-check and install (--check, --yes)\n\
+\n\
   CCOS v0.3 — Autonomous Context Runtime:\n\
     scan <path>                Scan a real workspace and ingest the delta\n\
     agents <path>              Run Coder/Reviewer/Security agents over a workspace\n\
@@ -2993,6 +3325,32 @@ mod tests {
     /// Build an owned `Vec<String>` arg list from string literals.
     fn argv(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn setup_opts_parse_defaults_and_flags() {
+        let d = SetupOpts::parse(&[]);
+        assert_eq!(d.dir, PathBuf::from("."));
+        assert!(!d.yes && !d.dry_run && !d.json && !d.hook);
+        assert!(d.report.is_none());
+        assert_eq!(d.workspace, "workspace.ccos");
+
+        let o = SetupOpts::parse(&argv(&[
+            "--yes",
+            "--dry-run",
+            "--json",
+            "--hook",
+            "--dir",
+            "proj",
+            "--report",
+            "out.json",
+            "--workspace",
+            "ws.ccos",
+        ]));
+        assert!(o.yes && o.dry_run && o.json && o.hook);
+        assert_eq!(o.dir, PathBuf::from("proj"));
+        assert_eq!(o.report, Some(PathBuf::from("out.json")));
+        assert_eq!(o.workspace, "ws.ccos");
     }
 
     #[test]

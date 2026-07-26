@@ -347,6 +347,7 @@ impl ASTParser {
         );
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn add_module_tree(
         &self,
         graph: &mut MemoryGraph,

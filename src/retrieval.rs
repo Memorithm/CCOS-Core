@@ -1030,8 +1030,8 @@ pub mod feedback {
             let maxs = s.iter().copied().fold(f32::NEG_INFINITY, f32::max);
             let exps: Vec<f32> = s.iter().map(|&x| (x - maxs).exp()).collect();
             let sum: f32 = exps.iter().sum();
-            for j in 0..n {
-                soft[i][j] = exps[j] / sum;
+            for (j, value) in exps.iter().enumerate() {
+                soft[i][j] = value / sum;
             }
             loss += -(s[i] - maxs - sum.ln()); // −log softmax(S_i)[i]
         }
@@ -1063,8 +1063,8 @@ pub mod feedback {
                     dw[base + d] += qk * da[k][d] + pk * dc[k][d];
                 }
             }
-            for d in 0..dout {
-                db[d] += da[k][d] + dc[k][d];
+            for (d, value) in db.iter_mut().enumerate().take(dout) {
+                *value += da[k][d] + dc[k][d];
             }
         }
         (loss, dw, db)
@@ -1366,6 +1366,7 @@ mod access_tests {
         let pro = Licensing::licensed(License {
             licensee: "acme".into(),
             expires_at: None,
+            machine: None,
         });
         let access =
             RetrievalAccess::unlock(&pro, now).expect("pro tier unlocks adaptive retrieval");

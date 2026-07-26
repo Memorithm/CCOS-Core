@@ -507,6 +507,7 @@ mod tests {
         Licensing::licensed(License {
             licensee: "acme".into(),
             expires_at: None,
+            machine: None,
         })
     }
 

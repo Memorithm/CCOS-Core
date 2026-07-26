@@ -1834,8 +1834,6 @@ fn apply_op(m: &mut CcosMemory, op: &Op, dirty: &mut bool) {
 /// The signing-key sidecar path for a workspace: `<path>.key` (64 hex chars —
 /// the raw 32-byte ed25519 seed). Lives NEXT to the state, never inside the
 /// timeline sidecar, so sharing an `.oplog` or a bundle can never leak it.
-// Reached by `load_signing_seed` only on `signed-sync` builds (and by tests on
-// every build); the allow keeps the crypto-free default build warning-free.
 #[cfg_attr(not(feature = "signed-sync"), allow(dead_code))]
 fn key_sidecar(path: &Path) -> PathBuf {
     let mut s = path.as_os_str().to_os_string();
@@ -2300,6 +2298,7 @@ mod tests {
         pro.set_licensing(Licensing::licensed(License {
             licensee: "acme".into(),
             expires_at: None,
+            machine: None,
         }));
         pro.set_custom_authorities(map)
             .expect("Pro tier installs custom authorities");
@@ -2351,6 +2350,7 @@ mod tests {
         pro.set_licensing(Licensing::licensed(License {
             licensee: "acme".into(),
             expires_at: None,
+            machine: None,
         }));
         pro.enable_slhav2_embeddings()
             .expect("Pro tier enables slhav2 embeddings");

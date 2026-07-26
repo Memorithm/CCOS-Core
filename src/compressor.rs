@@ -1037,9 +1037,9 @@ impl CausalSumm {
                 let row_sum: f64 = sim[i].iter().sum();
                 let mut s = 0.0f64;
                 if row_sum > 0.0 {
-                    for j in 0..n {
+                    for (j, score) in scores.iter().enumerate().take(n) {
                         if i != j {
-                            s += (sim[i][j] / row_sum) * scores[j];
+                            s += (sim[i][j] / row_sum) * *score;
                         }
                     }
                 }
