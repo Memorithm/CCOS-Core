@@ -32,6 +32,8 @@ pub enum NeuralEmbedError {
     Unreachable(String),
     /// The endpoint answered, but not with an embedding this module understands.
     BadResponse(String),
+    /// The endpoint host is not on the egress allowlist (air-gap: localhost only).
+    EgressDenied(String),
 }
 
 impl std::fmt::Display for NeuralEmbedError {
@@ -39,6 +41,7 @@ impl std::fmt::Display for NeuralEmbedError {
         match self {
             Self::Unreachable(e) => write!(f, "embedding endpoint unreachable: {e}"),
             Self::BadResponse(e) => write!(f, "embedding endpoint returned no usable vector: {e}"),
+            Self::EgressDenied(e) => write!(f, "embedding endpoint not on egress allowlist: {e}"),
         }
     }
 }
@@ -90,12 +93,23 @@ impl NeuralEncoder {
     /// once to learn the model's embedding dimension. Errors immediately — rather than degrading
     /// silently — if the endpoint is unreachable or answers with no usable vector.
     pub fn try_new(endpoint: &str, model: &str) -> Result<Self, NeuralEmbedError> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .connect_timeout(Duration::from_secs(3))
-            .build()
-            .map_err(|e| NeuralEmbedError::Unreachable(e.to_string()))?;
+        // Air-gap control (CCOS_EXTENDED plan P4): refuse a non-loopback endpoint
+        // before any connection attempt. The neural embedder is quarantined *and*
+        // localhost-only by default; an operator may widen this via
+        // `CCOS_EGRESS_ALLOW`, but until they do a remote endpoint is denied here
+        // — fail fast, never silently egress text off-host.
         let url = format!("{}/api/embeddings", endpoint.trim_end_matches('/'));
+        let validated = crate::egress::EgressAllowlist::from_env()
+            .validate(&url)
+            .map_err(|e| NeuralEmbedError::EgressDenied(e.to_string()))?;
+
+        let client = crate::egress::secure_blocking_client(
+            &validated,
+            Duration::from_secs(3),
+            Duration::from_secs(30),
+        )
+        .map_err(|e| NeuralEmbedError::Unreachable(e.to_string()))?;
+
         let mut enc = Self {
             client,
             url,
@@ -128,7 +142,8 @@ impl NeuralEncoder {
         if !resp.status().is_success() {
             return Err(format!("HTTP {}", resp.status()));
         }
-        resp.text().map_err(|e| e.to_string())
+        let body = crate::egress::blocking_response_bytes_limited(resp, 8 * 1024 * 1024)?;
+        String::from_utf8(body).map_err(|_| "embedding response is not UTF-8".to_string())
     }
 }
 
@@ -180,7 +195,10 @@ mod tests {
     #[test]
     fn try_new_fails_fast_on_unreachable_endpoint() {
         // Port 1 refuses immediately — the constructor must error, not hang or fake a dimension.
+        // The egress allowlist check runs first; either Denied or Unreachable is acceptable.
         let err = NeuralEncoder::try_new("http://127.0.0.1:1", "any-model");
-        assert!(matches!(err, Err(NeuralEmbedError::Unreachable(_))));
+        assert!(
+            matches!(err, Err(NeuralEmbedError::Unreachable(_) | NeuralEmbedError::EgressDenied(_))),
+        );
     }
 }

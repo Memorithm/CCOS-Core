@@ -1,7 +1,7 @@
 //! Small shared utilities used across the kernel.
 
 use sha2::{Digest, Sha256};
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -66,10 +66,12 @@ pub fn write_durable(path: &Path, bytes: &[u8]) -> io::Result<()> {
         }
     }
     let mut tmp = path.as_os_str().to_os_string();
-    tmp.push(".tmp");
+    tmp.push(format!(".tmp.{}", std::process::id()));
     let tmp = std::path::PathBuf::from(tmp);
     {
-        let mut f = File::create(&tmp)?;
+        let mut f = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        #[cfg(unix)]
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         f.write_all(bytes)?;
         f.sync_all()?; // flush contents + metadata to disk before we rename
     }
@@ -86,6 +88,9 @@ pub fn write_durable(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 #[cfg(test)]
 mod tests {
@@ -129,7 +134,7 @@ mod tests {
         write_durable(&path, b"second").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"second");
         let mut tmp = path.clone().into_os_string();
-        tmp.push(".tmp");
+        tmp.push(format!(".tmp.{}", std::process::id()));
         assert!(
             !std::path::Path::new(&tmp).exists(),
             "temp sibling is renamed away, not left behind"
