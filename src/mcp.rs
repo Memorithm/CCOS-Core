@@ -6,17 +6,16 @@
 //! memory lives in an [`AgentSession`], so the whole interaction is event-sourced
 //! and replayable.
 //!
-//! Sixteen tools: `ingest`, `recall`, `signal_failure`, `page_fault`, `stats`,
+//! Fourteen tools: `ingest`, `recall`, `signal_failure`, `page_fault`, `stats`,
 //! `verify`, the time-travel pair `timeline` / `recall_what_if`, `ccos_retrieve`
 //! (fetch the original of a compressed item), the causal-intervention pair
 //! `causal_intervene` (do(X): what a change forces) / `causal_blame` (candidate
 //! root causes), `drift_cause` (which recorded op moved a node's score —
 //! change-point attribution), `retrodict_belief` (the RTS-smoothed belief
-//! trajectory: future evidence folded back into past steps), `causal_flash`
+//! trajectory: future evidence folded back into past steps), and `causal_flash`
 //! (a bounded causal-cone context window rooted at the active frontier — a
-//! high-density summary that scales without recomputing global centrality), and
-//! the OpenClaw contract pair `get` (read an ingested file by path) / `sync`
-//! (boot/refresh checkpoint ack). It also exposes two
+//! high-density summary that scales without recomputing global centrality). It
+//! also exposes two
 //! read-only **resources** — `ccos://session/context` (the current
 //! self-bounding working set, linearised for direct injection into a system
 //! prompt) and `ccos://session/timeline` (the cognitive journal).
@@ -86,11 +85,7 @@ fn tool_specs() -> Value {
                     "decay": {"type": "number", "description": "'causal-flash': per-hop relevance decay in (0,1] (default 0.5)"},
                     "include_callers": {"type": "boolean", "description": "'causal-flash': add the one-hop caller impact ring (default true)"},
                     "include_low_trust_seeds": {"type": "boolean", "description": "'causal-flash': also seed from low-trust nodes, not just Working (default false)"},
-                    "trust_threshold": {"type": "number", "description": "'causal-flash': low-trust seeding threshold (default 0.5)"},
-                    "query": {"type": "string", "description": "OpenClaw memory_search query; alias for `text` (and `anchor` under 'around'). When `strategy` is unset, defaults to 'semantic'."},
-                    "limit": {"type": "integer", "description": "cap on the number of returned items (node-count cap, distinct from the `budget` token cap). Applied after recall."},
-                    "minScore": {"type": "number", "description": "drop items whose `score` is below this threshold."},
-                    "sessionKey": {"type": "string", "description": "optional session selector; CCOS resolves it to the active agent session when one is bound, ignored otherwise."}
+                    "trust_threshold": {"type": "number", "description": "'causal-flash': low-trust seeding threshold (default 0.5)"}
                 }
             }
         },
@@ -222,8 +217,12 @@ fn tool_specs() -> Value {
                     "decay": {"type": "number", "description": "per-hop relevance decay in (0,1] (default 0.5)"},
                     "include_callers": {"type": "boolean", "description": "add the one-hop in-edge impact ring (default true)"},
                     "include_low_trust_seeds": {"type": "boolean", "description": "also seed from low-trust nodes, not just Working (default false)"},
-                    "trust_threshold": {"type": "number", "description": "seed a node when include_low_trust_seeds and trust < this (default 0.5)"},
-                    "max_nodes": {"type": "integer", "description": "token budget: cap node count, dropping callers first; dependencies are never dropped (default unbounded)"}
+                    "trust_threshold": {"type": "number", "description": "'causal-flash': low-trust seeding threshold (default 0.5)"},
+                    "max_nodes": {"type": "integer", "description": "token budget: cap node count, dropping callers first; dependencies are never dropped (default unbounded)"},
+                    "query": {"type": "string", "description": "OpenClaw memory_search query; alias for `text` (and `anchor` under 'around'). When `strategy` is unset, defaults to 'semantic'."},
+                    "limit": {"type": "integer", "description": "cap on the number of returned items (node-count cap, distinct from the `budget` token cap). Applied after recall."},
+                    "minScore": {"type": "number", "description": "drop items whose `score` is below this threshold."},
+                    "sessionKey": {"type": "string", "description": "optional session selector; CCOS resolves it to the active agent session when one is bound, ignored otherwise."}
                 }
             }
         },
@@ -301,6 +300,12 @@ fn resource_specs() -> Value {
             "name": "CCOS cognitive timeline",
             "description": "The event-sourced journal of every memory operation this session (audit / replay).",
             "mimeType": "text/plain"
+        },
+        {
+            "uri": "ccos://setup/report",
+            "name": "CCOS setup verdict",
+            "description": "The sealed installer report written by `ccos setup` (per-check pass/fail, wiring actions, host probe, content hash). Produced deterministically by the installer — relay its verdict to the user verbatim; the JSON is the source of truth, not this server's memory. Path: $CCOS_SETUP_REPORT or ./setup_report.json.",
+            "mimeType": "application/json"
         }
     ])
 }
@@ -363,106 +368,6 @@ fn recall_from_args(args: &Value) -> Recall {
         }
         _ => Recall::working_set(),
     }
-}
-
-/// Normalize the OpenClaw `ccos.recall` contract aliases onto the existing
-/// recall arg shape: `query` → `text` (and `anchor` under 'around'), and when a
-/// query is present with no explicit `strategy`, default to a text/semantic
-/// search rather than the empty working set. Existing callers passing
-/// `strategy`/`text`/`anchor` directly are unaffected.
-fn normalize_recall_args(args: &Value) -> Value {
-    let mut n = args.clone();
-    let text_empty = n
-        .get("text")
-        .and_then(Value::as_str)
-        .is_none_or(|s| s.is_empty());
-    let query = n.get("query").and_then(Value::as_str).unwrap_or("");
-    if text_empty && !query.is_empty() {
-        n["text"] = json!(query);
-    }
-    let strategy_unset = n
-        .get("strategy")
-        .and_then(Value::as_str)
-        .is_none_or(|s| s.is_empty());
-    let has_text = n
-        .get("text")
-        .and_then(Value::as_str)
-        .is_some_and(|s| !s.is_empty());
-    if strategy_unset && has_text {
-        n["strategy"] = json!("semantic");
-    }
-    n
-}
-
-/// Strip a node-id prefix so a host gets a usable file path. `sym:src/db.rs:query`
-/// collapses to `src/db.rs` (the symbol's file); bare paths pass through unchanged.
-/// OpenClaw drops any recall item whose `path` is empty, so every item must yield one.
-fn ccos_path(uri: &str) -> String {
-    const PREFIXES: [&str; 5] = ["file:", "sym:", "mod:", "use:", "dep:"];
-    for p in PREFIXES {
-        if let Some(rest) = uri.strip_prefix(p) {
-            if p == "sym:" {
-                if let Some(colon) = rest.rfind(':') {
-                    return rest[..colon].to_string();
-                }
-            }
-            return rest.to_string();
-        }
-    }
-    uri.to_string()
-}
-
-/// Map a recalled window to the OpenClaw `ccos.recall` contract shape:
-/// `results: [{ path, snippet, score, source, citation? }]`. `path` is derived
-/// from the item `uri`; `citation` carries the compressed-item `ccr_ref` when
-/// present. `limit` caps the item count and `min_score` filters, both applied
-/// after recall so the advanced knobs (`budget`, `strategy`, …) keep working.
-fn window_to_contract_results(
-    win: &RecallWindow,
-    limit: Option<usize>,
-    min_score: Option<f64>,
-) -> Vec<Value> {
-    let mut out: Vec<Value> = Vec::new();
-    for item in &win.items {
-        if let Some(ms) = min_score {
-            if item.score < ms {
-                continue;
-            }
-        }
-        let path = ccos_path(&item.uri);
-        if path.is_empty() {
-            continue;
-        }
-        let mut row = json!({
-            "path": path,
-            "snippet": item.content,
-            "score": item.score,
-            // CCOS recall items are causal-graph nodes, not session transcripts;
-            // the sessions tier is owned server-side and surfaced separately.
-            "source": "memory",
-        });
-        if let Some(r) = &item.ccr_ref {
-            row["citation"] = json!(r.0.clone());
-        }
-        out.push(row);
-        if let Some(l) = limit {
-            if out.len() >= l {
-                break;
-            }
-        }
-    }
-    out
-}
-
-/// Build a tool result that carries both a human-readable MCP `content` block
-/// (existing clients) and a `structuredContent` object mcporter exposes as
-/// `{ structuredContent: <object> }` for OpenClaw. The text keeps the legacy
-/// serialized payload so existing tests/clients do not break.
-fn structured(text: String, structured_content: Value) -> Value {
-    json!({
-        "content": [{ "type": "text", "text": text }],
-        "structuredContent": structured_content,
-    })
 }
 
 /// The Pro **`octa-semantic`** recall strategy (`octasoma` feature): OctaSoma resolves
@@ -687,20 +592,8 @@ fn call_tool(
             if args.get("strategy").and_then(Value::as_str) == Some("octa-semantic") {
                 return octa_semantic_recall(session, state, &args, budget);
             }
-            // OpenClaw contract alias: `query` stands in for `text` (and `anchor`
-            // under 'around'); when no strategy is given but a query is, default
-            // to a text/semantic search rather than the empty working set, so a
-            // host sending only {query, limit} gets a real search back.
-            let n = normalize_recall_args(&args);
-            let win = session.recall(recall_from_args(&n), budget);
-            let limit = n.get("limit").and_then(Value::as_u64).map(|l| l as usize);
-            let min_score = n.get("minScore").and_then(Value::as_f64);
-            let results = window_to_contract_results(&win, limit, min_score);
-            let window_json = serde_json::to_string(&win).unwrap_or_default();
-            return Ok(structured(
-                window_json,
-                json!({ "results": results, "strategy": win.strategy, "tokens": win.tokens }),
-            ));
+            serde_json::to_string(&session.recall(recall_from_args(&args), budget))
+                .unwrap_or_default()
         }
         #[cfg(feature = "octasoma")]
         "octa_feedback" => return octa_feedback_tool(session, state, &args),
@@ -866,65 +759,45 @@ fn call_tool(
             if path.is_empty() {
                 return Err((-32602, "get requires 'path'".into()));
             }
-            // Accept `file:src/db.rs` or `src/db.rs` uniformly.
-            let uri = path.strip_prefix("file:").unwrap_or(&path).to_string();
-            return Ok(match session.memory().source_for(&uri) {
-                Some(source) => {
-                    let all: Vec<&str> = source.lines().collect();
-                    let total = all.len();
-                    let from = args
-                        .get("from")
-                        .and_then(Value::as_u64)
-                        .map(|n| n.max(1) as usize)
-                        .unwrap_or(1);
-                    let take = args
-                        .get("lines")
-                        .and_then(Value::as_u64)
-                        .map(|n| n as usize);
-                    let end = take.map(|m| (from - 1 + m).min(total)).unwrap_or(total);
-                    let start = (from - 1).min(total);
-                    let chosen: Vec<&str> = all
-                        .iter()
-                        .skip(start)
-                        .take(end.saturating_sub(start))
-                        .copied()
-                        .collect();
-                    let text = chosen.join("\n");
-                    let truncated = end < total;
-                    let next_from = if truncated { Some(end + 1) } else { None };
-                    structured(
-                        text.clone(),
-                        json!({
-                            "text": text,
-                            "path": uri,
-                            "truncated": truncated,
-                            "from": from,
-                            "lines": chosen.len(),
-                            "nextFrom": next_from,
-                        }),
-                    )
+            let source = session.memory().source_for(&path);
+            match source {
+                Some(text) => {
+                    let from = args.get("from").and_then(Value::as_u64).unwrap_or(1) as usize;
+                    let lines_specified = args.get("lines").and_then(Value::as_u64);
+                    let text = if from > 1 || lines_specified.is_some() {
+                        let v: Vec<&str> = text.lines().collect();
+                        let from = (from.max(1) - 1).min(v.len());
+                        let lines = lines_specified
+                            .map(|l| l as usize)
+                            .unwrap_or(usize::MAX);
+                        v[from..from + lines.min(v.len() - from)].join("\n")
+                    } else {
+                        text.to_string()
+                    };
+                    return Ok(json!({
+                        "content": [{ "type": "text", "text": text }],
+                        "lines": text.lines().count(),
+                        "path": path
+                    }))
                 }
-                None => json!({
-                    "content": [{ "type": "text",
-                        "text": format!("no ingested source for {path}; call ingest first") }],
-                    "isError": true
-                }),
-            });
+                None => {
+                    return Ok(json!({
+                        "content": [{ "type": "text",
+                            "text": format!("file not found in ingested sources: {path}") }],
+                        "isError": true
+                    }))
+                }
+            }
         }
         "sync" => {
-            use crate::external_memory::MemoryError;
-            let force = args.get("force").and_then(Value::as_bool).unwrap_or(false);
-            // Boot/refresh = make in-memory state durable. NoPath is a no-op for a
-            // transient session; `force` still acks so a host boot probe does not fail.
-            let persisted = match session.checkpoint() {
-                Ok(()) => true,
-                Err(MemoryError::NoPath) => force,
-                Err(_) => false,
-            };
-            let step = session.timeline().len();
-            let reason = str_arg(&args, "reason");
-            let ack = json!({ "ok": true, "persisted": persisted, "step": step, "reason": reason });
-            return Ok(structured(ack.to_string(), ack));
+            if args.get("force").and_then(Value::as_bool).unwrap_or(false) {
+                let _ = session.checkpoint();
+            }
+            json!({
+                "step": session.timeline().len(),
+                "ok": true,
+                "events": session.memory().verify().events,
+            }).to_string()
         }
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
@@ -1323,6 +1196,7 @@ mod tests {
         s.set_licensing(Licensing::licensed(License {
             licensee: "acme".into(),
             expires_at: None,
+            machine: None,
         }));
         let ok = call(&mut s, 2);
         let text = ok["result"]["content"][0]["text"].as_str().unwrap();
@@ -1359,6 +1233,7 @@ mod tests {
         s.set_licensing(Licensing::licensed(License {
             licensee: "acme".into(),
             expires_at: None,
+            machine: None,
         }));
         let mut st = ServerState::default();
         let exact = "pub fn query() -> i64 { 1 }";
@@ -1463,6 +1338,7 @@ mod tests {
         s.set_licensing(Licensing::licensed(License {
             licensee: "acme".into(),
             expires_at: None,
+            machine: None,
         }));
         let r = handle(&mut s, &fb_req(2)).unwrap();
         assert_eq!(r["result"]["isError"], true);
@@ -2085,190 +1961,5 @@ mod tests {
             comp_text.chars().count(),
             raw_text.chars().count()
         );
-    }
-
-    /// The OpenClaw `ccos.recall` contract: a `structuredContent` object whose
-    /// `results` array carries items with a non-empty `path` (the field OpenClaw
-    /// keys on — items without one are dropped) and a `snippet`. The legacy
-    /// `content[0].text` envelope keeps the serialized window for existing clients.
-    #[test]
-    fn recall_returns_structured_content_with_results_and_path() {
-        let mut s = AgentSession::new();
-        ingest_code(
-            &mut s,
-            1,
-            "src/a.rs",
-            "pub fn a() -> u64 { 1 }\npub fn b() -> u64 { 2 }\n",
-        );
-        let r = handle(
-            &mut s,
-            &req(
-                2,
-                "tools/call",
-                json!({ "name": "recall", "arguments": { "strategy": "working_set", "limit": 8 } }),
-            ),
-        )
-        .unwrap();
-        let sc = &r["result"]["structuredContent"];
-        assert!(sc.is_object(), "recall must carry structuredContent: {r}");
-        let results = sc["results"].as_array().expect("results is an array");
-        assert!(!results.is_empty(), "working_set recall returns items");
-        let paths: Vec<&str> = results.iter().filter_map(|i| i["path"].as_str()).collect();
-        assert!(
-            paths.iter().any(|p| p.contains("src/a.rs")),
-            "at least one result path is the ingested file: {paths:?}"
-        );
-        for item in results {
-            assert!(
-                !item["path"].as_str().unwrap_or("").is_empty(),
-                "no pathless item"
-            );
-            assert!(item["snippet"].as_str().is_some(), "snippet present");
-            assert!(item["score"].as_f64().is_some(), "score present");
-            assert_eq!(item["source"], "memory");
-        }
-        // Legacy envelope preserved.
-        assert!(r["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap_or("")
-            .contains("src/a.rs"));
-    }
-
-    /// `query` is the OpenClaw alias for `text`; with no explicit `strategy` it
-    /// defaults to a semantic search (the `semantic-region` window strategy).
-    #[test]
-    fn recall_query_alias_defaults_to_semantic() {
-        let mut s = AgentSession::new();
-        ingest_code(&mut s, 1, "src/db.rs", "pub fn query() -> i64 { 1 }\n");
-        let r = handle(
-            &mut s,
-            &req(
-                2,
-                "tools/call",
-                json!({ "name": "recall", "arguments": { "query": "pub fn query", "limit": 4 } }),
-            ),
-        )
-        .unwrap();
-        assert_eq!(
-            r["result"]["structuredContent"]["strategy"], "semantic-region",
-            "query with no strategy defaults to semantic"
-        );
-        assert!(r["result"]["structuredContent"]["results"].is_array());
-    }
-
-    /// `limit` caps the item count and `minScore` filters, both applied after
-    /// recall so the advanced knobs keep working.
-    #[test]
-    fn recall_limit_caps_and_minscore_filters() {
-        let mut s = AgentSession::new();
-        ingest_code(&mut s, 1, "src/big.rs", &code_fixture());
-        let capped = handle(
-            &mut s,
-            &req(
-                2,
-                "tools/call",
-                json!({ "name": "recall", "arguments": { "strategy": "working_set", "limit": 1 } }),
-            ),
-        )
-        .unwrap();
-        let n = capped["result"]["structuredContent"]["results"]
-            .as_array()
-            .map(Vec::len)
-            .unwrap_or(usize::MAX);
-        assert!(n <= 1, "limit caps the result count: got {n}");
-
-        let filtered = handle(
-            &mut s,
-            &req(
-                3,
-                "tools/call",
-                json!({ "name": "recall", "arguments": { "strategy": "working_set", "minScore": 999.0 } }),
-            ),
-        )
-        .unwrap();
-        let m = filtered["result"]["structuredContent"]["results"]
-            .as_array()
-            .map(Vec::len)
-            .unwrap_or(0);
-        assert_eq!(
-            m, 0,
-            "minScore above every score filters all items: got {m}"
-        );
-    }
-
-    /// `ccos.get` reads an ingested file by path, windowed by `from`/`lines`, and
-    /// reports `nextFrom` + `truncated` for pagination.
-    #[test]
-    fn get_returns_windowed_source() {
-        let mut s = AgentSession::new();
-        ingest_code(&mut s, 1, "src/x.rs", "l1\nl2\nl3\nl4\nl5\n");
-        let r = handle(
-            &mut s,
-            &req(
-                2,
-                "tools/call",
-                json!({ "name": "get", "arguments": { "path": "src/x.rs", "from": 2, "lines": 2 } }),
-            ),
-        )
-        .unwrap();
-        let sc = &r["result"]["structuredContent"];
-        assert_eq!(sc["text"], "l2\nl3");
-        assert_eq!(sc["path"], "src/x.rs");
-        assert_eq!(sc["from"], 2);
-        assert_eq!(sc["lines"], 2);
-        assert_eq!(sc["truncated"], true);
-        assert_eq!(sc["nextFrom"], 4);
-    }
-
-    #[test]
-    fn get_missing_path_is_an_error() {
-        let mut s = AgentSession::new();
-        let r = handle(
-            &mut s,
-            &req(
-                1,
-                "tools/call",
-                json!({ "name": "get", "arguments": { "path": "src/missing.rs" } }),
-            ),
-        )
-        .unwrap();
-        assert_eq!(r["result"]["isError"], true);
-    }
-
-    /// `ccos.sync` is the boot/refresh ack: it checkpoints and reports the
-    /// timeline step. With `force` it acks even when no persistence path is bound.
-    #[test]
-    fn sync_acks_and_reports_step() {
-        let mut s = AgentSession::new();
-        ingest_code(&mut s, 1, "src/a.rs", "pub fn a() {}\n");
-        let r = handle(
-            &mut s,
-            &req(
-                2,
-                "tools/call",
-                json!({ "name": "sync", "arguments": { "force": true, "reason": "boot" } }),
-            ),
-        )
-        .unwrap();
-        let sc = &r["result"]["structuredContent"];
-        assert_eq!(sc["ok"], true);
-        assert_eq!(sc["reason"], "boot");
-        assert_eq!(sc["persisted"], true, "force acks persistence");
-        assert!(sc["step"].as_u64().is_some(), "step is a number");
-    }
-
-    /// The catalogue advertises the two new contract tools.
-    #[test]
-    fn tools_list_advertises_get_and_sync() {
-        let mut s = AgentSession::new();
-        let r = handle(&mut s, &req(1, "tools/list", Value::Null)).unwrap();
-        let names: Vec<&str> = r["result"]["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| t["name"].as_str().unwrap())
-            .collect();
-        assert!(names.contains(&"get"), "catalogue advertises get");
-        assert!(names.contains(&"sync"), "catalogue advertises sync");
     }
 }
