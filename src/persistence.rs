@@ -18,6 +18,10 @@ use crate::persist::KernelSnapshot;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+const PERSIST_MAGIC: &[u8; 4] = b"CCPS";
+const PERSIST_VERSION: u16 = 1;
+const MAX_PERSIST_PAYLOAD: usize = 64 * 1024 * 1024;
+
 /// Typed error for persistence operations.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -116,14 +120,55 @@ impl PersistentRuntime {
 }
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), PersistenceError> {
-    let json = serde_json::to_string(value)?;
-    std::fs::write(path, json)?;
+    let payload = serde_json::to_vec(value)?;
+    if payload.len() > MAX_PERSIST_PAYLOAD {
+        return Err(PersistenceError::Serde(
+            "persistence payload exceeds limit".into(),
+        ));
+    }
+    let digest = crate::util::sha256_bytes(std::str::from_utf8(&payload).unwrap_or_default());
+    let mut envelope = Vec::with_capacity(4 + 2 + 8 + 32 + payload.len());
+    envelope.extend_from_slice(PERSIST_MAGIC);
+    envelope.extend_from_slice(&PERSIST_VERSION.to_le_bytes());
+    envelope.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+    envelope.extend_from_slice(&digest);
+    envelope.extend_from_slice(&payload);
+    crate::util::write_durable(path, &envelope)?;
     Ok(())
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, PersistenceError> {
-    let data = std::fs::read_to_string(path)?;
-    Ok(serde_json::from_str(&data)?)
+    let data = std::fs::read(path)?;
+    if data.len() >= 46 && &data[..4] == PERSIST_MAGIC {
+        let version = u16::from_le_bytes([data[4], data[5]]);
+        if version != PERSIST_VERSION {
+            return Err(PersistenceError::Serde(format!(
+                "unsupported persistence version {version}"
+            )));
+        }
+        let len = u64::from_le_bytes(data[6..14].try_into().unwrap()) as usize;
+        if len > MAX_PERSIST_PAYLOAD || data.len() != 46 + len {
+            return Err(PersistenceError::Integrity(
+                "invalid persistence payload length".into(),
+            ));
+        }
+        let payload = &data[46..];
+        let digest = crate::util::sha256_bytes(std::str::from_utf8(payload).unwrap_or_default());
+        if digest != data[14..46] {
+            return Err(PersistenceError::Integrity(
+                "persistence payload hash mismatch".into(),
+            ));
+        }
+        return Ok(serde_json::from_slice(payload)?);
+    }
+    // Explicit legacy migration path: old JSON files remain readable, but all
+    // subsequent writes use the bounded, hashed envelope above.
+    if data.len() > MAX_PERSIST_PAYLOAD {
+        return Err(PersistenceError::Serde(
+            "legacy persistence payload exceeds limit".into(),
+        ));
+    }
+    Ok(serde_json::from_slice(&data)?)
 }
 
 #[cfg(test)]
