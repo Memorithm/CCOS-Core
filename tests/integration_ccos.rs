@@ -559,7 +559,10 @@ fn phase13_incremental_no_full_rebuild() {
 
     // O(Δ): only file_5 and its immediate dependencies should change
     // The delta should NOT rebuild the entire graph
-    assert_eq!(delta.operation, ccos_core::incremental::MutationOp::FileModified);
+    assert_eq!(
+        delta.operation,
+        ccos_core::incremental::MutationOp::FileModified
+    );
 
     // change should be bounded — not a full graph rebuild
     let total_change = delta.nodes_added + delta.nodes_removed;

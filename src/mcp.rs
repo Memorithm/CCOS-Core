@@ -767,9 +767,7 @@ fn call_tool(
                     let text = if from > 1 || lines_specified.is_some() {
                         let v: Vec<&str> = text.lines().collect();
                         let from = (from.max(1) - 1).min(v.len());
-                        let lines = lines_specified
-                            .map(|l| l as usize)
-                            .unwrap_or(usize::MAX);
+                        let lines = lines_specified.map(|l| l as usize).unwrap_or(usize::MAX);
                         v[from..from + lines.min(v.len() - from)].join("\n")
                     } else {
                         text.to_string()
@@ -778,7 +776,7 @@ fn call_tool(
                         "content": [{ "type": "text", "text": text }],
                         "lines": text.lines().count(),
                         "path": path
-                    }))
+                    }));
                 }
                 None => {
                     return Ok(json!({
@@ -797,7 +795,8 @@ fn call_tool(
                 "step": session.timeline().len(),
                 "ok": true,
                 "events": session.memory().verify().events,
-            }).to_string()
+            })
+            .to_string()
         }
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };

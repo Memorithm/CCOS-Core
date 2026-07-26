@@ -33,8 +33,16 @@ fn claim_graph() -> (MemoryGraph, NodeId) {
 }
 
 fn assert_evidence(g: &mut MemoryGraph, id: &str, claim: &NodeId, w: f64, t: EdgeType) {
-    g.upsert_node(nid(id), id.into(), format!("evidence {id}"), NodeType::AnalysisResult);
-    assert!(g.add_edge(nid(id), claim.clone(), w, t), "edge endpoints exist");
+    g.upsert_node(
+        nid(id),
+        id.into(),
+        format!("evidence {id}"),
+        NodeType::AnalysisResult,
+    );
+    assert!(
+        g.add_edge(nid(id), claim.clone(), w, t),
+        "edge endpoints exist"
+    );
 }
 
 fn custom(key: &str, value: &str) -> EventPayload {
@@ -64,8 +72,20 @@ fn temporal_update() {
         "the production database is FoundationDB".into(),
         NodeType::ContextBlock,
     );
-    assert_evidence(&mut g, "t3.migration_done", &new_claim, 1.0, EdgeType::Supports);
-    assert_evidence(&mut g, "t3.migration_done", &claim, 1.0, EdgeType::Contradicts);
+    assert_evidence(
+        &mut g,
+        "t3.migration_done",
+        &new_claim,
+        1.0,
+        EdgeType::Supports,
+    );
+    assert_evidence(
+        &mut g,
+        "t3.migration_done",
+        &claim,
+        1.0,
+        EdgeType::Contradicts,
+    );
 
     let old = g.qbelief(&claim);
     let new = g.qbelief(&new_claim);
@@ -95,7 +115,10 @@ fn contradiction_detection() {
     );
     // Both sources preserved with polarity.
     assert_eq!(g.evidence_of(&claim, EdgeType::Supports), [&nid("src_a")]);
-    assert_eq!(g.evidence_of(&claim, EdgeType::Contradicts), [&nid("src_b")]);
+    assert_eq!(
+        g.evidence_of(&claim, EdgeType::Contradicts),
+        [&nid("src_b")]
+    );
 }
 
 // ── §36 contradiction_resolution ───────────────────────────────────────────
@@ -105,10 +128,22 @@ fn contradiction_detection() {
 fn contradiction_resolution() {
     let (mut g, claim) = claim_graph();
     assert_evidence(&mut g, "blog_rumor", &claim, 0.3, EdgeType::Supports);
-    assert_evidence(&mut g, "official_runbook", &claim, 1.0, EdgeType::Contradicts);
+    assert_evidence(
+        &mut g,
+        "official_runbook",
+        &claim,
+        1.0,
+        EdgeType::Contradicts,
+    );
     let q = g.qbelief(&claim);
-    assert!(q.belief < 0.0, "higher-authority refutation resolves: {q:?}");
-    assert!(q.support > 0.0 && q.contradiction > 0.0, "no silent merging");
+    assert!(
+        q.belief < 0.0,
+        "higher-authority refutation resolves: {q:?}"
+    );
+    assert!(
+        q.support > 0.0 && q.contradiction > 0.0,
+        "no silent merging"
+    );
     // The resolution is explainable: the refuting source is enumerable.
     let refs = g.evidence_of(&claim, EdgeType::Contradicts);
     assert_eq!(refs, [&nid("official_runbook")]);
@@ -135,7 +170,10 @@ fn invalidation() {
 fn episodic_recall() {
     let mut log = EventLog::new("episode-test".into());
     for i in 0..5 {
-        log.append(EventType::AgentAction, custom("episode", &format!("step {i}")));
+        log.append(
+            EventType::AgentAction,
+            custom("episode", &format!("step {i}")),
+        );
     }
     let events = log.replay_events(0, None);
     assert_eq!(events.len(), 5);
@@ -150,8 +188,14 @@ fn episodic_recall() {
 #[test]
 fn decision_outcome() {
     let mut log = EventLog::new("decision-test".into());
-    log.append(EventType::AgentAction, custom("decision", "rollback from state s0"));
-    log.append(EventType::AgentAction, custom("outcome", "recovered in 42ms"));
+    log.append(
+        EventType::AgentAction,
+        custom("decision", "rollback from state s0"),
+    );
+    log.append(
+        EventType::AgentAction,
+        custom("outcome", "recovered in 42ms"),
+    );
     let integrity = log.verify_integrity();
     assert!(integrity.valid, "chain intact: {:?}", integrity.errors);
     assert_eq!(integrity.verified_events, 2);
@@ -198,7 +242,10 @@ fn replay_equivalence() {
     assert_eq!(sa, sb, "identical construction → identical snapshot");
     // Round-trip: snapshot → restore → same derived beliefs.
     let restored: MemoryGraph = serde_json::from_str(&sa).unwrap();
-    assert_eq!(a.qbelief(&nid("db.current")), restored.qbelief(&nid("db.current")));
+    assert_eq!(
+        a.qbelief(&nid("db.current")),
+        restored.qbelief(&nid("db.current"))
+    );
 }
 
 // ── §36 model_switching ────────────────────────────────────────────────────
@@ -230,7 +277,11 @@ fn model_switching() {
             _ => None,
         })
         .collect();
-    assert_eq!(models.len(), 3, "all provider identities preserved with provenance");
+    assert_eq!(
+        models.len(),
+        3,
+        "all provider identities preserved with provenance"
+    );
 }
 
 // ── §36 provenance ─────────────────────────────────────────────────────────
@@ -246,7 +297,12 @@ fn provenance() {
     assert_eq!(node.label, "audit_2026_07", "source precision");
     // A claim with no evidence reports neutral — never an invented source.
     let orphan = nid("never.asserted");
-    g.upsert_node(orphan.clone(), "claim".into(), "unasserted".into(), NodeType::ContextBlock);
+    g.upsert_node(
+        orphan.clone(),
+        "claim".into(),
+        "unasserted".into(),
+        NodeType::ContextBlock,
+    );
     let q = g.qbelief(&orphan);
     assert_eq!(q.support, 0.0);
     assert_eq!(q.belief, 0.0, "no provenance hallucination");

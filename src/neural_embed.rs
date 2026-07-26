@@ -197,8 +197,9 @@ mod tests {
         // Port 1 refuses immediately — the constructor must error, not hang or fake a dimension.
         // The egress allowlist check runs first; either Denied or Unreachable is acceptable.
         let err = NeuralEncoder::try_new("http://127.0.0.1:1", "any-model");
-        assert!(
-            matches!(err, Err(NeuralEmbedError::Unreachable(_) | NeuralEmbedError::EgressDenied(_))),
-        );
+        assert!(matches!(
+            err,
+            Err(NeuralEmbedError::Unreachable(_) | NeuralEmbedError::EgressDenied(_))
+        ),);
     }
 }
