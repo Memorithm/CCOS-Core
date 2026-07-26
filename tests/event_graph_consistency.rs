@@ -1,5 +1,5 @@
-use ccos::event_log::{EventLog, EventPayload, EventType};
-use ccos::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
+use ccos_core::event_log::{EventLog, EventPayload, EventType};
+use ccos_core::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
 use std::collections::HashMap;
 
 /// Build a graph from an event log by replaying GraphMutation events.
@@ -412,7 +412,7 @@ fn replay_consistency_full_cycle() {
     }
 
     // Assert replay is deterministic
-    let mut replayer = ccos::event_log::EventReplayer::new();
+    let mut replayer = ccos_core::event_log::EventReplayer::new();
     let result = event_log.replay_deterministic(&mut replayer);
     assert!(result.is_ok(), "deterministic replay must succeed");
 }

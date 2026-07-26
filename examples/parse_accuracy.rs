@@ -16,7 +16,7 @@
 //! lines only in `heuristic.txt` are **false positives** (items it hallucinated). The
 //! trailing `TOTALS` line quantifies the aggregate gap at a glance.
 
-use ccos::parser::{ASTParser, ModuleDecl};
+use ccos_core::parser::{ASTParser, ModuleDecl};
 use std::fs;
 use std::path::{Path, PathBuf};
 

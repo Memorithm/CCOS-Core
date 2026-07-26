@@ -12,7 +12,7 @@
 //! in the recalled window?) per strategy. Where a strategy doesn't beat lexical,
 //! the table says so — no cherry-picking.
 
-use ccos::external_memory::{CcosMemory, ExternalMemory, Recall};
+use ccos_core::external_memory::{CcosMemory, ExternalMemory, Recall};
 
 /// One benchmark task: a free-text query and the file the recall *should* surface.
 struct Task {

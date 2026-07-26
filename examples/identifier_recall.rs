@@ -7,8 +7,8 @@
 //!
 //! Run: `cargo run --release --example identifier_recall`
 
-use ccos::embeddings::tokenize;
-use ccos::external_memory::{CcosMemory, ExternalMemory, Recall};
+use ccos_core::embeddings::tokenize;
+use ccos_core::external_memory::{CcosMemory, ExternalMemory, Recall};
 
 /// (file, identifier function name, natural-language query for it).
 const CASES: &[(&str, &str, &str)] = &[

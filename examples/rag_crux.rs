@@ -16,8 +16,8 @@
 //!
 //! Run: `cargo run --release --example rag_crux`
 
-use ccos::embeddings::{tokenize, TfidfEmbedder};
-use ccos::external_memory::{CcosMemory, ExternalMemory};
+use ccos_core::embeddings::{tokenize, TfidfEmbedder};
+use ccos_core::external_memory::{CcosMemory, ExternalMemory};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};

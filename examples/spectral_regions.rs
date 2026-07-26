@@ -10,7 +10,7 @@
 //!
 //! Run: `cargo run --release --example spectral_regions`
 
-use ccos::external_memory::{CcosMemory, ExternalMemory};
+use ccos_core::external_memory::{CcosMemory, ExternalMemory};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};

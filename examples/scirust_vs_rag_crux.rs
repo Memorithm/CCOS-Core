@@ -23,8 +23,8 @@
 //!
 //! Run: `cargo run --release --example scirust_vs_rag_crux`
 
-use ccos::embeddings::{tokenize, TfidfEmbedder};
-use ccos::lsa::{project, weighted_lsa_projection, IncrementalLsa};
+use ccos_core::embeddings::{tokenize, TfidfEmbedder};
+use ccos_core::lsa::{project, weighted_lsa_projection, IncrementalLsa};
 use std::time::Instant;
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {

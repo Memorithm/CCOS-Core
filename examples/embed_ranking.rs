@@ -9,7 +9,7 @@
 //!
 //! Run: `cargo run --release --example embed_ranking`
 
-use ccos::embeddings::CausalEmbeddings;
+use ccos_core::embeddings::CausalEmbeddings;
 
 const DOMAINS: [&str; 10] = [
     "payment",

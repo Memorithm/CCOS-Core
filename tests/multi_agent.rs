@@ -1,9 +1,9 @@
 //! CCOS v0.3 — Multi-agent execution integration tests: coherent events,
 //! deterministic replay, and resilience to hostile/oversized context.
 
-use ccos::agents::{Agent, AgentExecutor, CoderAgent, ReviewerAgent, SecurityAgent};
-use ccos::event_log::EventLog;
-use ccos::event_log::{EventReplayer, EventType};
+use ccos_core::agents::{Agent, AgentExecutor, CoderAgent, ReviewerAgent, SecurityAgent};
+use ccos_core::event_log::EventLog;
+use ccos_core::event_log::{EventReplayer, EventType};
 
 const SAMPLE: &str =
     "fn main() {}\nstruct S;\nimpl S { fn run(&self) { let x = f().unwrap(); } }\n// TODO\nlet c = std::process::Command::new(\"/bin/sh\");";

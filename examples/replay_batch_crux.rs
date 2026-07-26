@@ -1,6 +1,6 @@
 //! **The crux: time-travel reconstruction was O(N²); batching makes it O(N).**
 //!
-//! [`AgentSession::replay_to`](ccos::agent_session::AgentSession::replay_to) rebuilds the agent's
+//! [`AgentSession::replay_to`](ccos_core::agent_session::AgentSession::replay_to) rebuilds the agent's
 //! memory at any past step by re-applying the recorded op-log on top of the baseline — the engine
 //! behind time-travel debugging, `recall_what_if`, and the counterfactual `retrieval_reward`. It
 //! used to call the eager `ingest_source` for **every** `Ingest` op, so each of the N ingests re-ran
@@ -15,8 +15,8 @@
 //!
 //! Run: `cargo run --release --example replay_batch_crux`
 
-use ccos::agent_session::AgentSession;
-use ccos::external_memory::{CcosMemory, ExternalMemory};
+use ccos_core::agent_session::AgentSession;
+use ccos_core::external_memory::{CcosMemory, ExternalMemory};
 use std::time::{Duration, Instant};
 
 /// A module with `fns` mutually-calling functions, a const they all read (data-flow), a cross-file

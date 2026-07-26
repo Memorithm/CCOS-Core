@@ -7,8 +7,8 @@
 //! count grew linearly with the number of cycles even though the node count was
 //! capped). That broke the O(Δ) guarantee and the long-term stability budget.
 
-use ccos::incremental::IncrementalGraphEngine;
-use ccos::memory::{EdgeType, MemoryGraph, NodeType};
+use ccos_core::incremental::IncrementalGraphEngine;
+use ccos_core::memory::{EdgeType, MemoryGraph, NodeType};
 use std::collections::HashSet;
 
 /// Drive the engine through many mutation cycles under tight paging pressure

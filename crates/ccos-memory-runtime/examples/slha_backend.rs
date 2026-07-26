@@ -65,7 +65,7 @@ fn main() {
 
     println!(
         "\n→ WARM footprint = 96 B (latent 64 + metadata 32; only the 32-byte residual is freed),\n\
-         matching `scirust::ccos::WARM_BYTES`. No `scirust` is pulled — the decode is vendored, so\n\
+         matching `scirust::ccos_core::WARM_BYTES`. No `scirust` is pulled — the decode is vendored, so\n\
          the default CCOS build stays byte-identical; the backend is reached only via `--features slhav2`."
     );
 }

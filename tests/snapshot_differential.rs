@@ -1,6 +1,6 @@
-use ccos::event_log::{EventLog, EventPayload, EventType};
-use ccos::incremental::IncrementalGraphEngine;
-use ccos::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
+use ccos_core::event_log::{EventLog, EventPayload, EventType};
+use ccos_core::incremental::IncrementalGraphEngine;
+use ccos_core::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
 use sha2::{Digest, Sha256};
 
 /// Compute a deterministic hash of graph state for snapshot comparison
@@ -27,7 +27,7 @@ fn graph_hash(graph: &MemoryGraph) -> String {
     }
 
     // Hash edges deterministically
-    let mut edges_sorted: Vec<&ccos::memory::GraphEdge> = graph.edges().iter().collect();
+    let mut edges_sorted: Vec<&ccos_core::memory::GraphEdge> = graph.edges().iter().collect();
     edges_sorted.sort_by(|a, b| {
         a.source
             .0

@@ -72,8 +72,8 @@
 //! topology — so they receive no entry in the result and their edges drop out.
 //!
 //! ```
-//! use ccos::memory::{EdgeType, MemoryGraph, NodeType};
-//! use ccos::spectral::eigenvector_centrality;
+//! use ccos_core::memory::{EdgeType, MemoryGraph, NodeType};
+//! use ccos_core::spectral::eigenvector_centrality;
 //!
 //! let mut g = MemoryGraph::new(0.2, usize::MAX);
 //! for n in ["hub", "a", "b", "c"] {
@@ -111,8 +111,8 @@ pub const MAX_ITERS: usize = 1000;
 /// # Examples
 ///
 /// ```
-/// use ccos::memory::MemoryGraph;
-/// use ccos::spectral::eigenvector_centrality;
+/// use ccos_core::memory::MemoryGraph;
+/// use ccos_core::spectral::eigenvector_centrality;
 ///
 /// // An empty graph yields an empty ranking.
 /// let g = MemoryGraph::new(0.2, usize::MAX);

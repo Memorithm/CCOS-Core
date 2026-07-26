@@ -11,7 +11,7 @@
 //!
 //! Run: `cargo run --release --example propagation_crux`
 
-use ccos::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
+use ccos_core::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
 
 fn claim(g: &mut MemoryGraph, id: &str) {
     g.upsert_node(

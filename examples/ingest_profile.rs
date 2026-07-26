@@ -9,8 +9,8 @@
 //!
 //! Run: `cargo run --release --example ingest_profile`
 
-use ccos::memory::MemoryGraph;
-use ccos::parser::ASTParser;
+use ccos_core::memory::MemoryGraph;
+use ccos_core::parser::ASTParser;
 use std::time::Instant;
 
 /// A synthetic source file: a module with `fns` mutually-calling functions, a `const` they all read

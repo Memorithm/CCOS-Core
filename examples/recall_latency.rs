@@ -9,7 +9,7 @@
 //! TF-IDF (and, under `learned-embed`, the LSA) store from all resident nodes on
 //! every call — that's the cost we want to quantify across corpus sizes.
 
-use ccos::external_memory::{CcosMemory, ExternalMemory, Recall};
+use ccos_core::external_memory::{CcosMemory, ExternalMemory, Recall};
 use std::time::Instant;
 
 fn corpus(n: usize) -> CcosMemory {

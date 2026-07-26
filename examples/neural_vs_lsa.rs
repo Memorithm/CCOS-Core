@@ -19,8 +19,8 @@
 //! The lexical and LSA rows are bit-for-bit reproducible; the neural row is **not** replay-exact
 //! (weights/server/hardware-dependent) — that asymmetry is the point of the quarantine.
 
-use ccos::neural_embed::NeuralEncoder;
-use ccos::retrieval::{metrics, CcosEncoder, Encoder, LsaEncoder, SemanticRetriever};
+use ccos_core::neural_embed::NeuralEncoder;
+use ccos_core::retrieval::{metrics, CcosEncoder, Encoder, LsaEncoder, SemanticRetriever};
 use std::collections::HashSet;
 
 /// The synonym crux: query (V-vocabulary) → answer (disjoint W-vocabulary), linked only by bridges.

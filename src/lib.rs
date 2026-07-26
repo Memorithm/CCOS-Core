@@ -12,7 +12,7 @@
 //! The core entry types are re-exported at the crate root:
 //!
 //! ```
-//! use ccos::{CcosMemory, ExternalMemory, Recall};
+//! use ccos_core::{CcosMemory, ExternalMemory, Recall};
 //!
 //! let mut mem = CcosMemory::new();
 //! mem.ingest_source("src/db.rs", "pub fn query() -> i64 { 0 }\n");
@@ -172,7 +172,7 @@ pub mod region_metrics;
 // ── Core re-exports ─────────────────────────────────────────────────
 //
 // The handful of entry types a library consumer needs, lifted to the crate root
-// so they can be reached as `ccos::CcosMemory` / `ccos::Recall` instead of the
+// so they can be reached as `ccos_core::CcosMemory` / `ccos_core::Recall` instead of the
 // full module path. The modules above remain public for everything else.
 pub use agent_session::AgentSession;
 pub use event_log::EventLog;

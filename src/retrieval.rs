@@ -1109,7 +1109,7 @@ pub mod feedback {
     /// An online **improvement loop**: accumulate confirmed `(query, relevant-doc)` embedding pairs,
     /// then `train_cycle` a [`ProjectionHead`] on them so projected retrieval improves. Deterministic
     /// and dependency-free; the projected space is consumed by the same [`DenseIndex`] the rest of
-    /// `ccos::retrieval` uses, so improvement is measured with [`Self::evaluate_recall_at_k`].
+    /// `ccos_core::retrieval` uses, so improvement is measured with [`Self::evaluate_recall_at_k`].
     pub struct ImprovementLoop {
         head: ProjectionHead,
         queries: Vec<Vec<f32>>,

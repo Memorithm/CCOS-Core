@@ -1,4 +1,4 @@
-use ccos::guard::{GuardConfig, GuardLayer};
+use ccos_core::guard::{GuardConfig, GuardLayer};
 use serde_json::Value;
 
 fn make_guard() -> GuardLayer {

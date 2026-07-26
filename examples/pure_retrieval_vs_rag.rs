@@ -1,5 +1,5 @@
 //! **Pure retrieval challenges RAG — measured, deterministically.** SciRust's pure-retrieval
-//! algorithms, distilled into `ccos::retrieval` (zero extra deps, bit-exact `f32`), run over the
+//! algorithms, distilled into `ccos_core::retrieval` (zero extra deps, bit-exact `f32`), run over the
 //! embeddings CCOS already owns and are scored the way RAG benchmarks score their retrievers.
 //!
 //! Eval set = CCOS's own `src/*.rs` (same corpus + ground truth as `rag_crux`): for each file `A`
@@ -16,9 +16,9 @@
 //!
 //! Run: `cargo run --release --example pure_retrieval_vs_rag`
 
-use ccos::embeddings::{tokenize, TfidfEmbedder};
-use ccos::external_memory::{CcosMemory, ExternalMemory};
-use ccos::retrieval::{metrics, CcosEncoder, HybridRetriever, SemanticRetriever};
+use ccos_core::embeddings::{tokenize, TfidfEmbedder};
+use ccos_core::external_memory::{CcosMemory, ExternalMemory};
+use ccos_core::retrieval::{metrics, CcosEncoder, HybridRetriever, SemanticRetriever};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -144,7 +144,7 @@ fn main() {
         hybrid.index_text(i as u64, src).unwrap();
     }
     // Retrieve the full ranking, then drop the query's own id (a file is its own top hit).
-    let strip = |a: usize, r: Vec<ccos::retrieval::Scored>| -> Vec<u64> {
+    let strip = |a: usize, r: Vec<ccos_core::retrieval::Scored>| -> Vec<u64> {
         r.into_iter()
             .map(|s| s.id)
             .filter(|&id| id != a as u64)

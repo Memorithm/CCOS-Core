@@ -2,8 +2,8 @@
 //! sequences of file edits, not just the hand-written scenarios. This is the
 //! randomized counterpart to `tests/graph_invariants.rs`.
 
-use ccos::incremental::IncrementalGraphEngine;
-use ccos::memory::MemoryGraph;
+use ccos_core::incremental::IncrementalGraphEngine;
+use ccos_core::memory::MemoryGraph;
 use proptest::prelude::*;
 use std::collections::HashSet;
 

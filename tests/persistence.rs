@@ -1,11 +1,11 @@
 //! CCOS v0.3 — Persistent state engine integration tests: a full
 //! create → shutdown → reload → compare cycle, plus a corrupted-log chaos case.
 
-use ccos::distributed_event_log::DistributedEventLog;
-use ccos::event_log::{EventLog, EventPayload, EventType};
-use ccos::incremental::IncrementalGraphEngine;
-use ccos::memory::MemoryGraph;
-use ccos::persistence::{PersistenceError, PersistentRuntime, RuntimeState};
+use ccos_core::distributed_event_log::DistributedEventLog;
+use ccos_core::event_log::{EventLog, EventPayload, EventType};
+use ccos_core::incremental::IncrementalGraphEngine;
+use ccos_core::memory::MemoryGraph;
+use ccos_core::persistence::{PersistenceError, PersistentRuntime, RuntimeState};
 use std::path::PathBuf;
 
 fn temp_dir(tag: &str) -> PathBuf {

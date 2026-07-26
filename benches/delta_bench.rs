@@ -8,8 +8,8 @@
 //!
 //! Run with `cargo bench`.
 
-use ccos::incremental::IncrementalGraphEngine;
-use ccos::memory::MemoryGraph;
+use ccos_core::incremental::IncrementalGraphEngine;
+use ccos_core::memory::MemoryGraph;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 fn file_source(i: usize) -> String {

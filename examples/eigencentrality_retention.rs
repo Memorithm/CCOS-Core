@@ -15,7 +15,7 @@
 //!
 //! Run: `cargo run --release --example eigencentrality_retention`
 
-use ccos::memory::{CentralityMode, EdgeType, MemoryGraph, NodeId, NodeType, ScoringWeights};
+use ccos_core::memory::{CentralityMode, EdgeType, MemoryGraph, NodeId, NodeType, ScoringWeights};
 
 const MIDS: usize = 3;
 const LEAVES_PER_MID: usize = 6;

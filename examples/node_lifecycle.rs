@@ -11,7 +11,7 @@
 //!
 //! Run: `cargo run --release --example node_lifecycle`
 
-use ccos::memory::{EdgeType, MemoryGraph, NodeId, NodeState, NodeType};
+use ccos_core::memory::{EdgeType, MemoryGraph, NodeId, NodeState, NodeType};
 
 const REALS: usize = 6;
 const DEAD: usize = 6;

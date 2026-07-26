@@ -13,7 +13,7 @@
 //!
 //! Run: `cargo run --release --example decay_crux`
 
-use ccos::memory::{EdgeType, MemoryGraph, NodeId, NodeType, QBelief};
+use ccos_core::memory::{EdgeType, MemoryGraph, NodeId, NodeType, QBelief};
 
 /// Build the fixture with `elapsed` ticks between the one-off objection (t=0) and the fresh
 /// support (t=`elapsed`), and return `(plain, decayed)` belief at the current time.

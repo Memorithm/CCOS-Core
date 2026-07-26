@@ -16,7 +16,7 @@
 //! captures, needs no instrumentation, and runs on any Rust project unmodified.
 //!
 //! ```
-//! use ccos::trace::parse_cargo_test_output;
+//! use ccos_core::trace::parse_cargo_test_output;
 //! let out = "thread 'tests::t' panicked at src/lib.rs:42:9:\n\
 //!            stack backtrace:\n\
 //!            \x20  2: mycrate::compute\n\

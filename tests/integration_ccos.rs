@@ -1,4 +1,4 @@
-use ccos::{
+use ccos_core::{
     event_log::{EventLog, EventPayload, EventReplayer, EventType},
     guard::{GuardConfig, GuardLayer},
     incremental::IncrementalGraphEngine,
@@ -117,7 +117,7 @@ fn phase3_mutation_simulation() {
     // O(Δ) assertions
     assert_ne!(
         delta.operation,
-        ccos::incremental::MutationOp::NoChange,
+        ccos_core::incremental::MutationOp::NoChange,
         "must detect modification"
     );
     assert!(
@@ -154,7 +154,7 @@ fn phase4_failure_propagation() {
         "src/sorter.rs".into(),
         "src/logger.rs".into(),
         0.9,
-        ccos::memory::EdgeType::DependsOn,
+        ccos_core::memory::EdgeType::DependsOn,
     );
 
     // Inject failure
@@ -504,19 +504,19 @@ fn phase12_graph_connectivity() {
         "a".into(),
         "b".into(),
         0.9,
-        ccos::memory::EdgeType::DependsOn,
+        ccos_core::memory::EdgeType::DependsOn,
     );
     graph.add_edge(
         "b".into(),
         "c".into(),
         0.9,
-        ccos::memory::EdgeType::DependsOn,
+        ccos_core::memory::EdgeType::DependsOn,
     );
     graph.add_edge(
         "c".into(),
         "d".into(),
         0.9,
-        ccos::memory::EdgeType::DependsOn,
+        ccos_core::memory::EdgeType::DependsOn,
     );
 
     // Failure at 'a' should propagate through entire chain
@@ -559,7 +559,7 @@ fn phase13_incremental_no_full_rebuild() {
 
     // O(Δ): only file_5 and its immediate dependencies should change
     // The delta should NOT rebuild the entire graph
-    assert_eq!(delta.operation, ccos::incremental::MutationOp::FileModified);
+    assert_eq!(delta.operation, ccos_core::incremental::MutationOp::FileModified);
 
     // change should be bounded — not a full graph rebuild
     let total_change = delta.nodes_added + delta.nodes_removed;

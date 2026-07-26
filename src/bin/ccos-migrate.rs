@@ -16,7 +16,7 @@
 //! embeddings are preserved in sidecars next to the workspace. Exits non-zero if
 //! the lossless content-hash check fails.
 
-use ccos::migrate::{self, MigrateConfig, MigrationOutcome, Mode};
+use ccos_core::migrate::{self, MigrateConfig, MigrationOutcome, Mode};
 use std::process::ExitCode;
 
 struct Opts {

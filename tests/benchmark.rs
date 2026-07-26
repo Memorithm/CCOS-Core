@@ -1,7 +1,7 @@
 //! CCOS v0.3 — Benchmark framework integration tests, including a 100k-cycle
 //! stress run and an opt-in 1,000,000-cycle long-stability run.
 
-use ccos::benchmark::{BenchmarkHarness, BenchmarkReport};
+use ccos_core::benchmark::{BenchmarkHarness, BenchmarkReport};
 
 #[test]
 fn stress_100k_cycles_stays_bounded() {

@@ -1,4 +1,4 @@
-use ccos::distributed_event_log::DistributedEventLog;
+use ccos_core::distributed_event_log::DistributedEventLog;
 
 #[test]
 fn replay_is_deterministic_under_load() {

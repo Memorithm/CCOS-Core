@@ -1,5 +1,5 @@
 //! Canonical replay smoke vector shared by native architecture jobs.
-use ccos::util::sha256_hex;
+use ccos_core::util::sha256_hex;
 
 #[test]
 fn canonical_replay_vector_hash_is_stable() {

@@ -9,7 +9,7 @@
 //!
 //! Run: `cargo run --release --example cold_ram`
 
-use ccos::memory::{EdgeType, MemoryGraph, NodeType};
+use ccos_core::memory::{EdgeType, MemoryGraph, NodeType};
 use std::path::Path;
 
 /// Resident set size in KiB from /proc (Linux); 0 if unavailable.

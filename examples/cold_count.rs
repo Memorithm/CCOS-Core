@@ -12,7 +12,7 @@
 //!
 //! Run: `cargo run --release --example cold_count`
 
-use ccos::memory::{EdgeType, MemoryGraph, NodeType};
+use ccos_core::memory::{EdgeType, MemoryGraph, NodeType};
 use std::path::Path;
 
 fn build_all_husks(files: usize, dir: &Path) -> MemoryGraph {

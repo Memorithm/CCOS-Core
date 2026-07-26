@@ -1,6 +1,6 @@
 //! **Vendor-side** offline *post-quantum* license tool — requires `--features license-pq`.
 //!
-//! The engine only ever *verifies* (against the baked-in [`ccos::license::LICENSE_SLH_DSA_PUBLIC_KEY`]);
+//! The engine only ever *verifies* (against the baked-in [`ccos_core::license::LICENSE_SLH_DSA_PUBLIC_KEY`]);
 //! this is the private-key side, never shipped to customers. It uses **SLH-DSA** (NIST FIPS 205,
 //! formerly SPHINCS+), SLH-DSA-SHAKE-128s: a 32-byte public key and a 7,856-byte (~10.5 KB base64url)
 //! post-quantum signature. Two subcommands:
@@ -23,7 +23,7 @@
 //! **Note:** the `lattice-slh-dsa` crate is pure Rust but **not independently audited** — see
 //! `docs/DEPLOYMENT.md` §4b before trusting it to gate production features.
 
-use ccos::license::sign_token_slhdsa;
+use ccos_core::license::sign_token_slhdsa;
 use std::fmt::Write as _;
 
 fn hex(bytes: &[u8]) -> String {

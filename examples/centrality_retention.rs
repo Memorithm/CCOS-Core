@@ -27,10 +27,10 @@
 //!
 //! Run: `cargo run --release --example centrality_retention`
 //!
-//! [`page_in`]: ccos::memory::MemoryGraph::page_in
-//! [`touch`]: ccos::memory::MemoryGraph::touch
+//! [`page_in`]: ccos_core::memory::MemoryGraph::page_in
+//! [`touch`]: ccos_core::memory::MemoryGraph::touch
 
-use ccos::memory::{EdgeType, MemoryGraph, NodeId, NodeType, ScoringWeights};
+use ccos_core::memory::{EdgeType, MemoryGraph, NodeId, NodeType, ScoringWeights};
 
 /// Workload shape — fixed across the whole sweep so `w_centrality` is the only variable.
 struct Workload {

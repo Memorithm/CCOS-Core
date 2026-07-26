@@ -11,7 +11,7 @@
 //!
 //! Run: `cargo run --release --example semantic_retrieval_crux`
 
-use ccos::retrieval::{
+use ccos_core::retrieval::{
     metrics, CcosEncoder, HybridRetriever, LsaEncoder, Scored, SemanticRetriever,
 };
 use std::collections::HashSet;

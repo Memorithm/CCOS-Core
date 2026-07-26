@@ -12,9 +12,9 @@
 //!
 //! Run: `cargo run --release --example call_crux`
 
-use ccos::embeddings::{tokenize, TfidfEmbedder};
-use ccos::external_memory::{CcosMemory, ExternalMemory};
-use ccos::memory::EdgeType;
+use ccos_core::embeddings::{tokenize, TfidfEmbedder};
+use ccos_core::external_memory::{CcosMemory, ExternalMemory};
+use ccos_core::memory::EdgeType;
 use std::collections::HashMap;
 
 fn main() {

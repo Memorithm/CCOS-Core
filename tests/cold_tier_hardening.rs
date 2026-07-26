@@ -16,7 +16,7 @@
 //! Compaction (slice 4) is deliberately left off here: it is *lossy by design*, so
 //! it has its own observable-not-exact tests; this suite pins the lossless tiers.
 
-use ccos::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
+use ccos_core::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
 use proptest::prelude::*;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

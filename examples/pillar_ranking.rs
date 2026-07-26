@@ -9,8 +9,8 @@
 //!
 //! Run: `cargo run --release --example pillar_ranking`
 
-use ccos::external_memory::{CcosMemory, ExternalMemory};
-use ccos::query;
+use ccos_core::external_memory::{CcosMemory, ExternalMemory};
+use ccos_core::query;
 use std::fs;
 use std::path::{Path, PathBuf};
 

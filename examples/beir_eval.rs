@@ -21,7 +21,7 @@
 //! BM25 uses a plain lowercase-alphanumeric tokenizer (no stemming, no stopword list), so landing in
 //! that neighbourhood — deterministically, in pure Rust — is the honest claim, not SOTA.
 
-use ccos::retrieval::{
+use ccos_core::retrieval::{
     metrics, reciprocal_rank_fusion, Bm25Index, CcosEncoder, LsaEncoder, SemanticRetriever,
 };
 use std::collections::{HashMap, HashSet};

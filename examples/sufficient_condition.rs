@@ -15,8 +15,8 @@
 //!
 //! Run: `cargo run --release --example sufficient_condition`
 
-use ccos::embeddings::{tokenize, TfidfEmbedder};
-use ccos::external_memory::{CcosMemory, ExternalMemory};
+use ccos_core::embeddings::{tokenize, TfidfEmbedder};
+use ccos_core::external_memory::{CcosMemory, ExternalMemory};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 

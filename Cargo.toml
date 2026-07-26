@@ -1,12 +1,17 @@
 [package]
-name = "ccos"
-version = "0.3.0"
+name = "ccos-core"
+version = "0.4.0-pre"
 edition = "2021"
-license = "LicenseRef-CheckupAuto-Dual"
+license = "LicenseRef-TarekZekriti-Dual"
+build = "build.rs"
 # The `ccos` CLI is the primary binary. Declaring it here keeps a bare
 # `cargo run` (e.g. the CI smoke `cargo run --features llm -- version`)
 # unambiguous now that the workspace also ships the `ccos-migrate` tool.
 default-run = "ccos"
+
+[lib]
+name = "ccos_core"
+path = "src/lib.rs"
 
 [dependencies]
 # Async runtime + HTTP client are only needed by the LLM / eval / workspace
@@ -198,5 +203,9 @@ required-features = ["octasoma"]
 # through the opt-in `slhav2` feature above.
 [workspace]
 members = ["crates/ccos-memory-runtime"]
+
+[workspace.package]
+rust-version = "1.89"
+license = "LicenseRef-TarekZekriti-Dual"
 
 

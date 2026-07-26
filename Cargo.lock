@@ -121,8 +121,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "ccos"
-version = "0.3.0"
+name = "ccos-core"
+version = "0.4.0-pre"
 dependencies = [
  "ccos-memory-runtime",
  "chrono",

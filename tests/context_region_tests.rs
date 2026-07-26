@@ -5,11 +5,11 @@
 //! deterministic replay, no drift over 10k cycles, snapshot identity, and chaos
 //! resilience (missing node, missing event, corrupted JSON, circular deps).
 
-use ccos::context_policy::ContextPolicy;
-use ccos::context_region::ContextRegion;
-use ccos::event_log::{EventLog, GraphReconstructor};
-use ccos::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
-use ccos::region_engine::{ContextRegionEngine, RegionQuery};
+use ccos_core::context_policy::ContextPolicy;
+use ccos_core::context_region::ContextRegion;
+use ccos_core::event_log::{EventLog, GraphReconstructor};
+use ccos_core::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
+use ccos_core::region_engine::{ContextRegionEngine, RegionQuery};
 
 /// Two files (a.rs, b.rs) with internal containment edges.
 fn two_file_graph() -> MemoryGraph {
@@ -66,7 +66,7 @@ fn regions_are_created_automatically() {
         .filter(|e| {
             matches!(
                 e.payload,
-                ccos::event_log::EventPayload::RegionCreated { .. }
+                ccos_core::event_log::EventPayload::RegionCreated { .. }
             )
         })
         .count();

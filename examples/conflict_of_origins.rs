@@ -1,21 +1,21 @@
 //! **Conflict of Origins** — when two sources disagree about the *same* claim, a flat store has to
 //! pick one, average them, or take the most recent. The Q-Page instead **nets them by authority**:
 //! the more credible source sets the *direction* of `belief`, while `conflict` reports how contested
-//! the claim still is and [`QBelief::is_validated`](ccos::memory::QBelief::is_validated) decides
+//! the claim still is and [`QBelief::is_validated`](ccos_core::memory::QBelief::is_validated) decides
 //! whether it is safe to act on. This is the payoff of per-source authority weighting.
 //!
 //! Fixture: one claim, asserted **+** by a high-authority source A (official docs, authority 0.90)
 //! and **−** by a source B (an incident report) whose authority `β` we sweep. The assertions are
-//! produced through the [`Extractor`](ccos::extractor::Extractor) pipeline (a deterministic
+//! produced through the [`Extractor`](ccos_core::extractor::Extractor) pipeline (a deterministic
 //! [`MockExtractor`] here — the LLM-backed extractor produces the *same* shape from raw text) and
 //! recorded via the normal `assert_support` / `assert_contradiction` path, so this is exactly what an
 //! ingested document pair would yield.
 //!
 //! Run: `cargo run --release --example conflict_of_origins`
 
-use ccos::external_memory::CcosMemory;
-use ccos::extractor::{Assertion, Extractor, MockExtractor, Stance};
-use ccos::memory::{NodeId, QBelief};
+use ccos_core::external_memory::CcosMemory;
+use ccos_core::extractor::{Assertion, Extractor, MockExtractor, Stance};
+use ccos_core::memory::{NodeId, QBelief};
 
 const CLAIM: &str = "claim:payment-api-thread-safe";
 

@@ -43,7 +43,7 @@
 //! ## Example
 //!
 //! ```no_run
-//! use ccos::external_memory::{CcosMemory, ExternalMemory, Recall};
+//! use ccos_core::external_memory::{CcosMemory, ExternalMemory, Recall};
 //!
 //! let mut mem = CcosMemory::open("workspace.ccos").unwrap();
 //! mem.ingest_source("src/db.rs", "pub fn query() {}\n");

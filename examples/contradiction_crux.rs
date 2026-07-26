@@ -17,8 +17,8 @@
 //!
 //! Run: `cargo run --release --example contradiction_crux`
 
-use ccos::embeddings::{tokenize, TfidfEmbedder};
-use ccos::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
+use ccos_core::embeddings::{tokenize, TfidfEmbedder};
+use ccos_core::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
 use std::collections::BTreeSet;
 
 fn main() {

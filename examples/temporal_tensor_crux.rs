@@ -20,7 +20,7 @@
 //!
 //! Run: `cargo run --release --example temporal_tensor_crux`
 
-use ccos::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
+use ccos_core::memory::{EdgeType, MemoryGraph, NodeId, NodeType};
 
 /// Upsert a bare claim node.
 fn node(g: &mut MemoryGraph, id: &str) {

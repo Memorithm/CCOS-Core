@@ -1,8 +1,8 @@
-use ccos::adversarial::{AdversarialEngine, AdversarialMode};
-use ccos::consensus::{ConsensusEngine, LlmVote};
-use ccos::distributed_event_log::DistributedEventLog;
-use ccos::guard::{GuardConfig, GuardLayer};
-use ccos::memory::MemoryGraph;
+use ccos_core::adversarial::{AdversarialEngine, AdversarialMode};
+use ccos_core::consensus::{ConsensusEngine, LlmVote};
+use ccos_core::distributed_event_log::DistributedEventLog;
+use ccos_core::guard::{GuardConfig, GuardLayer};
+use ccos_core::memory::MemoryGraph;
 
 fn make_guard() -> GuardLayer {
     GuardLayer::new(GuardConfig::default())
@@ -38,7 +38,7 @@ fn distributed_log_end_to_end() {
             format!("node_{}", i).into(),
             format!("Node {}", i),
             format!("content from event {}", event_id),
-            ccos::memory::NodeType::ContextBlock,
+            ccos_core::memory::NodeType::ContextBlock,
         );
     }
 
@@ -164,7 +164,7 @@ fn full_pipeline_stress_500_cycles() {
             format!("cycle_node_{}", cycle).into(),
             format!("Cycle {}", cycle),
             result.output.clone(),
-            ccos::memory::NodeType::AnalysisResult,
+            ccos_core::memory::NodeType::AnalysisResult,
         );
 
         // Phase: event log

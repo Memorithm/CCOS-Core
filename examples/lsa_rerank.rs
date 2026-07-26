@@ -13,7 +13,7 @@
 //!
 //! Run: `cargo run --release --example lsa_rerank`
 
-use ccos::external_memory::{CcosMemory, ExternalMemory, Recall};
+use ccos_core::external_memory::{CcosMemory, ExternalMemory, Recall};
 
 const TOPICS: &[(&str, &str)] = &[
     ("payment", "billing"),

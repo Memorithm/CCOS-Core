@@ -1,6 +1,6 @@
 //! **Vendor-side** offline license tool — requires `--features license`.
 //!
-//! The engine only ever *verifies* (against the baked-in [`ccos::license::LICENSE_PUBLIC_KEY`]); this
+//! The engine only ever *verifies* (against the baked-in [`ccos_core::license::LICENSE_PUBLIC_KEY`]); this
 //! is the private-key side, never shipped to customers. Two subcommands:
 //!
 //! - `keygen` — generate an ed25519 keypair. Paste the printed public key into `LICENSE_PUBLIC_KEY`
@@ -14,7 +14,7 @@
 //! ```
 //! The emitted token goes in `$CCOS_LICENSE` or the license file; `ccos license` then reports Pro.
 
-use ccos::license::sign_token;
+use ccos_core::license::sign_token;
 use std::fmt::Write as _;
 
 fn hex(bytes: &[u8]) -> String {

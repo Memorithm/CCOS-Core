@@ -17,8 +17,8 @@
 //! ## Example
 //!
 //! ```
-//! use ccos::agent_session::AgentSession;
-//! use ccos::external_memory::{ExternalMemory, Recall};
+//! use ccos_core::agent_session::AgentSession;
+//! use ccos_core::external_memory::{ExternalMemory, Recall};
 //!
 //! let mut s = AgentSession::new();
 //! s.ingest("src/db.rs", "pub fn timeout() -> i64 { 30 }\n");

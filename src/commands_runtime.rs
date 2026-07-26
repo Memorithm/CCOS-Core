@@ -2,15 +2,15 @@
 //! `scan`, `agents`, `benchmark` and the `runtime` capstone that wires the
 //! scheduler, scanner, agents, and persistence together.
 
-use ccos::agents::{Agent, AgentExecutor, CoderAgent, ReviewerAgent, SecurityAgent};
-use ccos::benchmark::BenchmarkHarness;
-use ccos::distributed_event_log::DistributedEventLog;
-use ccos::event_log::EventLog;
-use ccos::incremental::IncrementalGraphEngine;
-use ccos::memory::MemoryGraph;
-use ccos::persistence::{PersistentRuntime, RuntimeState};
-use ccos::scheduler::ContextScheduler;
-use ccos::workspace::WorkspaceScanner;
+use ccos_core::agents::{Agent, AgentExecutor, CoderAgent, ReviewerAgent, SecurityAgent};
+use ccos_core::benchmark::BenchmarkHarness;
+use ccos_core::distributed_event_log::DistributedEventLog;
+use ccos_core::event_log::EventLog;
+use ccos_core::incremental::IncrementalGraphEngine;
+use ccos_core::memory::MemoryGraph;
+use ccos_core::persistence::{PersistentRuntime, RuntimeState};
+use ccos_core::scheduler::ContextScheduler;
+use ccos_core::workspace::WorkspaceScanner;
 use std::path::Path;
 use uuid::Uuid;
 
