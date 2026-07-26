@@ -1,28 +1,44 @@
-name: Security Audit
+name: Supply Chain
 
-# Kept off the per-push path to conserve GitHub Actions minutes on this private
-# repo: cargo-audit (which compiles from source) runs weekly and on demand,
-# rather than on every push. Informational — advisories in transitive deps that
-# are outside our control should not gate development.
 on:
+  push:
+    branches: [main]
   schedule:
-    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+    - cron: "0 6 * * 1"
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  audit:
-    name: cargo audit
-    runs-on: ubuntu-latest
+  dependency-policy:
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-      - name: Set up Rust
-        run: |
-          rustup update stable --no-self-update
-          rustup default stable
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      - name: Audit
-        run: cargo audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install 1.89.0 --profile minimal
+      - name: Install pinned cargo-deny
+        run: cargo +1.89.0 install cargo-deny --version 0.19.9 --locked
+      - run: cargo +1.89.0 deny check advisories bans licenses sources
+
+  sbom-and-provenance:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install 1.89.0 --profile minimal
+      - name: Install pinned CycloneDX generator
+        run: cargo +1.89.0 install cargo-cyclonedx --version 0.5.9 --locked
+      - name: Generate SBOM and release provenance
+        run: ./scripts/release_metadata.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-metadata-${{ github.sha }}
+          path: release-metadata/
+          if-no-files-found: error
+          retention-days: 30

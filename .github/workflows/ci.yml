@@ -4,124 +4,191 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
-  # Keep the single consolidated build's disk footprint small enough for a
-  # GitHub-hosted runner. The all-features debug build of the whole workspace —
-  # every example and test binary — was exhausting the runner disk at link time
-  # ("No space left on device" / ld Bus error). Debug info is the bulk of
-  # `target/` and is irrelevant to `clippy -D warnings`, test pass/fail, and doc
-  # builds, so stripping it (and disabling incremental artifacts) changes no
-  # result — it only shrinks `target/`.
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
+  RUST_BACKTRACE: "1"
 
-# A single consolidated job keeps GitHub Actions minute usage low on this private
-# repo: one checkout, one toolchain setup, and one shared `target/` so
-# dependencies compile once and every step reuses them; dependency caching cuts
-# repeat runs further. Cheapest checks run first (fail-fast). Only GitHub-authored
-# actions are used (actions/checkout, actions/cache) so no third-party action can
-# be blocked by org policy. The slower `cargo audit` runs weekly in audit.yml,
-# off the per-push path.
 jobs:
-  ci:
-    name: CI
-    runs-on: ubuntu-latest
+  format:
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
-
-      # Reclaim ~20 GB of runner disk (large preinstalled SDKs this build never
-      # uses) so the consolidated all-features compile cannot exhaust the device.
-      # Pure shell — no third-party action, matching this workflow's policy.
-      - name: Free up disk space
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install 1.89.0 --profile minimal --component rustfmt
+      - name: Format first-party Rust boundaries
         run: |
-          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
-            /usr/share/dotnet /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
-          df -h /
+          cargo +1.89.0 fmt --all --check
+          cargo +1.89.0 fmt --manifest-path crates/forge/forge-core/Cargo.toml --all -- --check
 
-      - name: Set up Rust
-        run: |
-          rustup update stable --no-self-update
-          rustup default stable
-          rustup component add rustfmt clippy
-          rustc --version && cargo --version
-
-      - name: Cache cargo registry and target
-        uses: actions/cache@v5
+  clippy-default:
+    needs: format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install 1.89.0 --profile minimal --component clippy
+      - uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: |
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
-            target
-          key: cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            cargo-${{ runner.os }}-
+          key: cargo-registry-ubuntu-24.04-rust-1.89.0-${{ hashFiles('Cargo.lock') }}
+      - run: cargo +1.89.0 clippy --all-targets --locked -- -D warnings
 
-      # Cheapest first: formatting needs no compilation.
-      - name: Format
-        run: cargo fmt --all --check
-
-      # One compile of all dependencies (incl. the optional `syn` path), reused
-      # by the test/doc/run steps below.
-      - name: Clippy (default + all features)
-        run: cargo clippy --all-targets --all-features --locked -- -D warnings
-
-      - name: Test (default — real `syn` AST is now the default parser)
-        run: cargo test --locked
-
-      - name: Test (--no-default-features — line-heuristic fallback)
-        run: cargo test --no-default-features --locked
-
-      - name: Test (llm feature — async modules + binary)
-        run: cargo test --features llm --locked
-
-      - name: Test (learned-embed feature — LSA semantic embedder)
-        run: cargo test --features learned-embed --locked
-
-      - name: Test (license feature — offline ed25519 verifier)
-        run: cargo test --features license --locked
-
-      - name: Test (license-pq feature — offline post-quantum SLH-DSA verifier)
-        run: cargo test --features license-pq --locked
-
-      - name: Test (license + license-pq — both verifiers compose, cross-scheme isolation)
-        run: cargo test --features license,license-pq --locked
-
-      - name: Test (octasoma feature — Pro semantic-memory backend + example)
+  sandbox-security:
+    needs: format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install 1.89.0 --profile minimal
+      - name: Install Bubblewrap
         run: |
-          cargo test --features octasoma --locked
-          cargo run --locked --features octasoma --example octasoma_semantic
-
-      - name: Docs
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-        # `--all-features` so the feature-gated modules (llm/eval/workspace) and
-        # the intra-doc links that reference them resolve.
-        run: cargo doc --no-deps --all-features --locked
-
-      - name: Smoke-test the CLI
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap
+          test -x /usr/bin/bwrap
+          test -x /usr/bin/prlimit
+      - name: Adversarial sandbox tests as unprivileged runner
         run: |
-          cargo run --locked --features llm -- version
-          cargo run --locked --features llm -- analyze src --out /tmp/run.json
-          cargo run --locked --features llm -- verify /tmp/run.json
-          cargo run --locked --features llm -- replay /tmp/run.json
-          cargo run --locked --features llm -- top src --limit 10
-          cargo run --locked --features llm -- blame /tmp/run.json file:src/lib.rs --depth 3
-          cargo run --locked --features llm -- export /tmp/run.json --out /tmp/ccos.graphml
-          cargo run --locked --features llm -- regions src
-          cargo run --locked --features llm -- regions src --activate file:src/lib.rs
-          cargo run --locked --features llm -- regions src --metrics file:src/lib.rs --json
-          cargo run --locked --features llm -- experiment --tasks 60
-          cargo run --locked --features llm -- eval --tasks 4
-          printf '%s\n' '{"op":"ingest","uri":"src/x.rs","source":"pub fn x() {}"}' '{"op":"recall","strategy":"working_set","budget":512}' '{"op":"verify"}' | cargo run --locked --features llm -- stdin
-          cargo run --locked --features llm -- chaos --iters 500
-          cargo run --locked --features llm -- license
-          # Post-quantum license verifier builds + runs under each feature combo (the embedded
-          # key is the fail-closed placeholder, so the tier stays community — the verify→Pro path
-          # is covered by the `license-pq` unit tests above, not by this smoke).
-          cargo run --locked --features llm,license-pq -- doctor
-          cargo run --locked --features llm,license,license-pq -- doctor
-          cargo run --locked --features license-pq --example license_sign_pq -- keygen >/dev/null
+          cargo +1.89.0 fetch --locked
+          cargo +1.89.0 fetch --manifest-path crates/forge/forge-core/Cargo.toml --locked
+          cargo +1.89.0 test -p ccos-sandbox --locked --offline -- --test-threads=1
+          cargo +1.89.0 test -p ccos --features rsi-dgm \
+            guarded_cargo_evaluator_requires_sandbox_and_a_real_test_result \
+            --locked --offline -- --test-threads=1
+          cargo +1.89.0 test \
+            --manifest-path crates/forge/forge-core/Cargo.toml \
+            --test generated_candidate --test iso --test secure_limits_test \
+            --locked --offline -- --test-threads=1
+
+  test-core-msrv:
+    needs: format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install 1.89.0 --profile minimal
+      - run: cargo +1.89.0 check --workspace --locked
+      - run: cargo +1.89.0 test --locked
+      - run: cargo +1.89.0 test --no-default-features --locked
+
+  test-core-stable:
+    needs: format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install stable --profile minimal
+      - run: rustc +stable --version --verbose
+      - run: cargo +stable check --workspace --all-targets --locked
+      - run: cargo +stable test --locked
+
+  test-premium-deterministic:
+    needs: clippy-default
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      # Premium feature sets include native crypto builds; cap parallelism to
+      # avoid exhausting the hosted runner and losing runner communication.
+      CARGO_BUILD_JOBS: "2"
+      RUST_TEST_THREADS: "2"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install 1.89.0 --profile minimal
+      - run: cargo +1.89.0 test --features license,license-pq,signed-sync --locked
+      - run: cargo +1.89.0 test --features slhav2,learned-embed --locked
+      - run: cargo +1.89.0 test --features octasoma,octacore --locked
+      - run: cargo +1.89.0 test --features rsi --locked
+      - run: cargo +1.89.0 test --features pro-default --locked
+
+  test-replay-relax:
+    needs: clippy-default
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_BUILD_JOBS: "2"
+      RUST_TEST_THREADS: "2"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install 1.89.0 --profile minimal
+      - run: cargo +1.89.0 test --features slhav2-full --locked
+      - run: cargo +1.89.0 test --features rsi-dgm --locked
+      - run: cargo +1.89.0 test --features all-full --locked
+
+  test-workspace-members:
+    needs: clippy-default
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install 1.89.0 --profile minimal
+      - run: >-
+          cargo +1.89.0 test --locked
+          -p scirust -p slha-mcp -p slha-c -p ccos-memory-runtime
+          -p octasoma -p octacore -p rsi
+
+  feature-combinations:
+    needs: clippy-default
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install 1.89.0 --profile minimal
+      - name: Bounded feature matrix
+        run: |
+          cargo +1.89.0 check --no-default-features --locked
+          for features in \
+            llm learned-embed license license-pq signed-sync slhav2 slhav2-full \
+            octasoma octacore rsi rsi-dgm pro-default all-full \
+            license,license-pq octasoma,slhav2 rsi,octacore; do
+            cargo +1.89.0 check --no-default-features --features "$features" --locked
+          done
+      - name: Community dependency-tree guard
+        run: |
+          cargo +1.89.0 tree --locked --edges normal > /tmp/community-tree.txt
+          if grep -E '(^| )scirust v|(^| )octasoma v|(^| )octacore v|(^| )rsi v' /tmp/community-tree.txt; then
+            echo "default community build links a premium crate" >&2
+            exit 1
+          fi
+      - name: Replay-relax compile guard
+        run: ./scripts/check_feature_boundaries.sh
+
+  docs:
+    needs: clippy-default
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install 1.89.0 --profile minimal
+      - run: RUSTDOCFLAGS="-D warnings" cargo +1.89.0 doc -p ccos --no-deps --all-features --locked
+
+  aarch64-replay:
+    needs: test-core-msrv
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install 1.89.0 --profile minimal
+      - run: test "$(uname -m)" = aarch64
+      - run: cargo +1.89.0 test --locked --test determinism_boundary --test replay_vectors
+
+  bench-repro-smoke:
+    needs: test-core-msrv
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - run: rustup toolchain install 1.89.0 --profile minimal
+      - run: ./scripts/benchmark_repro.sh --smoke
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: benchmark-smoke-${{ github.sha }}
+          path: benchmark-results/
+          if-no-files-found: error
+          retention-days: 14
