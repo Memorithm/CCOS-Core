@@ -8,6 +8,70 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Content-addressed embedding cache (`ccos::embed_cache::CachedEmbedder`,
+  `octasoma` feature)** — the documented follow-up of the Pro semantic tier:
+  wrap ANY `octasoma::Embedder` (notably the local `OllamaEmbedder`) and
+  identical content is embedded once (`sha256(text) → vector`), making the
+  derived semantic index and the OctaCore cascade practical behind a real
+  neural embedder instead of one embedding call per node per rebuild.
+  Optional durable persistence (`save`/`load`, temp+fsync+atomic-rename like
+  every checkpoint) is **fail-closed**: a cache built by a different embedder
+  (label or dimension) or a malformed file is refused with an explicit error,
+  never served silently and never downgraded to an empty cache. Hit/miss
+  stats for observability; the deterministic `HashEmbedder` stays
+  bit-replayable with or without the cache (transparency covered by tests,
+  incl. identical cascade rankings). 5 unit tests + doctest.
+
+### Changed
+
+- **Documentation refresh (post-0.4.0 doc audit)** — the user-facing docs now
+  match the fused product: `docs/DEPLOYMENT.md` (0.4.0 doctor sample, the full
+  feature table incl. every fusion feature + the `pro-default`/`all-full`
+  bundles and premium build commands, `CCOS_LICENSE_FILE` in the license
+  resolution order, §4c now lists all **9** Pro features);
+  `docs/MEMORY_INTERFACE.md` (the MCP catalogue: the sixteen core tools incl.
+  `get`/`sync`, plus the Pro `slha.*`/`octa.*`/`rsi.*` namespaces) and the
+  matching README §3 count; `LICENSING.md` (new §2b separating the *copyright
+  license* from the *Pro runtime token*); `CONTRIBUTING.md` (the real fusion CI
+  matrix, premium dev-loop commands); `docs/ARCHITECTURE.md` (the fused
+  premium modules/crates map); CHANGELOG compare links; a ROADMAP pointer to
+  the fusion plan. `ccos doctor` additionally reports the compiled **premium**
+  features (`slhav2`/`slhav2-full`/`octasoma`/`octacore`/`rsi`/`rsi-dgm`,
+  plus `signed-sync`) in both text and JSON output, so a premium deployment can
+  verify at a glance that its build compiled the kernels it licensed.
+
+## [0.4.0] — 2026-07-08 — CCOS_EXTENDED premium fusion
+
+The first CCOS_EXTENDED release: the CCOS 0.3 core fused with SLHAv2, OctaSoma
+and CERVO/RSI (plan `docs/FUSION_PLAN.md`, P0–P6 all closed; audit
+`docs/AUDIT_FUSION_2026-07.md`). The **default build's behaviour and dependency
+tree are unchanged from CCOS 0.3** — every premium kernel is opt-in
+(cargo feature) and Pro-gated (offline license); the version bump names the
+fused product.
+
+### Added
+
+- **CCOS_EXTENDED fusion audit + P5/P6 close-out (the premium merger of CCOS +
+  SLHAv2 + OctaSoma + CERVO/RSI).** (1) *Base sync*: the CCOS core was caught up
+  with upstream #151 — `ccos.recall` aligned with the OpenClaw contract
+  (`query`/`limit`/`minScore`/`sessionKey` aliases + `structuredContent`) and the
+  new `get` / `sync` MCP tools. (2) *Vendored-source refresh*: the scirust family
+  was re-based onto SLHAv2 HEAD, ingesting the TurboQuant series — MIXED/TQ3/MIX3
+  latent codecs with AVX2/AVX-512/NEON score paths, `fit_joint`, COLD→EventLog
+  persistence, the `slha.compress` codec parameter, and the llama.cpp Phase-2
+  codec FFI (`slha_weights_load`/`slha_encode_key`/`slha_decode_latent`) — with
+  the P4 hardening re-applied on top (`#![deny(unsafe_code)]` + audited allow
+  zones + FFI alignment guard). (3) *P5 — unified premium surface*: one MCP
+  server multiplexing four namespaces (`ccos.*` + `slha.*` + `octa.*` + `rsi.*`,
+  `src/mcp_ext.rs`), each kernel tool behind its offline Pro gate with visible
+  refusals, and the matching CLI (`ccos slha|octa|rsi …`, refusal exit 3) sharing
+  the same implementation. **DGM self-modification stays unreachable over MCP and
+  the CLI** — typed `GuardedDgm` API only. (4) *P6 — CI matrix*: byte-identity
+  guard (default tree links no premium kernel), `pro-default` / `all-full` test
+  profiles, fused-member tests, community-tier CLI refusal smoke.
+  New: `tests/fusion_unified_mcp.rs` (6 tests), `docs/AUDIT_FUSION_2026-07.md`
+  (the full audit report).
+
 - **Cryptographic agent identity for the multi-agent store (`signed-sync`, off by default).** The
   hash chain proves a bundle's *integrity*; only a signature proves *who* recorded it. The new
   feature adds exactly that: `ccos sync keygen` creates a per-workspace ed25519 identity
@@ -93,7 +157,7 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **External dense-retrieval backend (`scirust-retrieval` feature).** Removed the optional bridge to the
   external `scirust-retrieval` crate (`src/scirust_bridge.rs`) and its `scirust-dense` eval strategy. CI
-  could no longer authenticate to the private `CHECKUPAUTO/scirust` repo (the pinned revision became
+  could no longer authenticate to the private `Memorithm/scirust` repo (the pinned revision became
   unreachable), which failed `cargo clippy --all-features --locked` at **dependency resolution** on every
   PR — before any code compiled. As the dependency was optional and off by default, removing it (dep,
   feature, `scirust_bridge` module, `scirust-dense` eval arm, the dedicated CI step, and the lock entries)
@@ -1336,4 +1400,5 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Unbounded edge leak, guard prefix-bypass, non-deterministic eviction, and
   `max_nesting_depth` enforcement (see [`ROADMAP.md`](ROADMAP.md) → *Done*).
 
-[Unreleased]: https://github.com/CHECKUPAUTO/CCOS/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Memorithm/CCOS_EXTENDED/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Memorithm/CCOS_EXTENDED/compare/v0.3.0...v0.4.0

@@ -33,7 +33,33 @@ A practical map of the codebase for contributors. For the conceptual write-up se
 | **`agents`** (v0.3)         | Multi-agent execution behind a trait | `Agent`, `AgentExecutor`, `CoderAgent`, `ReviewerAgent`, `SecurityAgent` |
 | **`persistence`** (v0.3)    | Durable runtime state (directory) + verify | `PersistentRuntime`, `RuntimeState` |
 | **`benchmark`** (v0.3)      | Cycle benchmark → JSON report | `BenchmarkHarness`, `BenchmarkReport` |
-| `main` (bin)                | Thin entry → `commands_demo` / `commands_runtime` + inline commands | — |
+| `main` (bin)                | Thin entry → `commands_demo` / `commands_runtime` + inline commands (+ the premium `slha`/`octa`/`rsi` subcommands in fused builds) | — |
+
+> The table above is the **core** (always-compiled) map; the hardening modules
+> `sanitizer`, `injection_classifier`, `compressor`, `license` and `egress` are
+> also always compiled. The premium fusion surface is below.
+
+## CCOS_EXTENDED — fused premium modules & crates
+
+Everything in this section is **off by default** (opt-in cargo feature), runtime
+Pro-gated by the offline license, and architecturally one-directional: the
+vendored crates never depend on `ccos` (the circular dependencies were inverted —
+the adapters live on the CCOS side). See [`FUSION_PLAN.md`](FUSION_PLAN.md) for
+the full architecture and [`AUDIT_FUSION_2026-07.md`](AUDIT_FUSION_2026-07.md)
+for the audit.
+
+| Module / crate | Feature | Responsibility | Key types |
+| -------------- | ------- | -------------- | --------- |
+| `slha_full` | `slhav2-full` | Pro gate to the REAL SLHAv2 kernel (backend + safety guard) | `FullSlhaAccess` |
+| `octa_index` | `octasoma` | OctaSoma-backed region-sharded semantic index + conformal feedback | `SemanticMemoryAccess`, `SemanticFeedback` |
+| `octacore_bridge` | `octacore` | CCOS-side half of the dep inversion: `ExternalMemory` as a cascade scope | `CcosScope`, `CausalCascadeAccess` |
+| `rsi_bridge` | `rsi` / `rsi-dgm` | RSI audit adapter + Linux OS-sandboxed DGM (allowlist, air-gapped evaluator, hash-chain audit) | `CcosAudit`, `RsiAccess`, `DgmAccess`, `GuardedDgm` |
+| `mcp_ext` | any premium | The `slha.*` / `octa.*` / `rsi.*` MCP namespaces multiplexed into `mcp` | `tool_specs`, `call_tool` |
+| `crates/ccos-memory-runtime` | `slhav2`(+`-full`) | Runtime-neutral `MemoryProvider` middleware (distilled tile backend; scirust backend behind `slhav2-full`) | `MemoryProvider`, `ScirustBackend` |
+| `crates/ccos-scirust` (+`-mcp`,`-c`,`-python`) | `slhav2-full` | The vendored SLHAv2 kernel: 128-byte tiles, INT4/grouped/NF4/mixed/TQ3 codecs, SIMD, `ElasticKvCache`, `LatentSafetyGuard`, EventLog persistence | `SciRustSlhaTile`, `ElasticKvCache` |
+| `crates/ccos-octasoma` | `octasoma` | The vendored OctaSoma semantic-memory engine (`#![forbid(unsafe_code)]`) | `Embedder`, `HashEmbedder` |
+| `crates/ccos-octacore` | `octacore` | The vendored cascade: causal-narrow → exact-cosine rerank | `Cascade`, `CausalScope` |
+| `crates/ccos-rsi` | `rsi` | The vendored CERVO/RSI engine (meta-search, DGM, wasm sandbox, audit) — no `ccos` edge | `RSIAgent`, `DgmEngine`, `AuditLog` |
 
 ## Core data structures
 

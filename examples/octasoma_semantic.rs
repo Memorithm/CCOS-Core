@@ -31,6 +31,7 @@ fn main() {
     let pro = Licensing::licensed(License {
         licensee: "demo".into(),
         expires_at: None,
+        machine: None,
     });
     let access = SemanticMemoryAccess::unlock(&pro, now).expect("pro tier unlocks octasoma");
 

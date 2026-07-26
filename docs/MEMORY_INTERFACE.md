@@ -224,24 +224,46 @@ whole interaction stays replayable.
 
 It speaks the standard handshake (`initialize` → `notifications/initialized` →
 `tools/list` / `tools/call` / `resources/list` / `resources/read`, plus `ping`) and
-advertises eight tools:
+advertises **sixteen core tools**:
 
 | Tool | Arguments | Maps to |
 | ---- | --------- | ------- |
 | `ingest` | `uri`, `source` | `ingest_source` |
-| `recall` | `strategy` ∈ `around`/`task`/`working_set`, `anchor`/`text`, `budget` | `recall` |
+| `recall` | `strategy` ∈ `around`/`task`/`semantic`/`hybrid`/`working_set`/`causal-flash` (+ the Pro `octa-semantic` in `octasoma` builds), `anchor`/`text`, `budget` — plus the OpenClaw aliases `query`/`limit`/`minScore`/`sessionKey` | `recall` |
 | `signal_failure` | `node`, `depth` | `signal_failure` |
 | `page_fault` | `output` (cargo-test/panic text), `budget` | parse trace → signal faulting files → recall |
 | `stats` | — | `stats` |
 | `verify` | — | `verify` |
 | `timeline` | — | the event-sourced cognitive journal (`AgentSession::timeline`) |
 | `recall_what_if` | `step`, `strategy`/`anchor`/`text`, `budget` | **time-travel** — rewind to `step` and re-run a recall (`AgentSession::recall_what_if`) |
+| `ccos_retrieve` | `ccr_ref` | the original (uncompressed) content of a compressed recall item |
+| `causal_intervene` | `node`, `magnitude`/`damping`/`depth` | do(X): the nodes a change transitively forces |
+| `causal_blame` | `node`, `damping`/`depth` | candidate root causes — what a node depends on |
+| `drift_cause` | `node` | change-point attribution: which recorded op moved a node's score |
+| `retrodict_belief` | `claim`, `stride`/`half_life`/`q`/`r` | the RTS-smoothed belief trajectory |
+| `causal_flash` | `horizon`/`decay`/`include_callers`/… | a bounded causal-cone context window over the active frontier |
+| `get` | `path`, `from`/`lines` | read an ingested source file by path (the OpenClaw `memory_get` surface) |
+| `sync` | `force` | boot/refresh ack — checkpoint the session, report the timeline step |
 
-The last two expose the capability a RAG stack structurally lacks: `timeline` is the
-ordered record of every memory operation, and `recall_what_if` deterministically
-*replays* the agent's memory to a past step and re-runs a recall under different
-parameters (a larger budget, a different anchor) — debugging an agent's context by
-rewinding it. Both are read-only, so they never trigger a checkpoint.
+`timeline` and `recall_what_if` expose the capability a RAG stack structurally lacks:
+the ordered record of every memory operation, and a deterministic *replay* of the
+agent's memory to a past step under different parameters (a larger budget, a
+different anchor) — debugging an agent's context by rewinding it. The analysis tools
+are read-only, so they never trigger a checkpoint.
+
+**Premium namespaces (CCOS_EXTENDED).** In fused builds the same server also
+multiplexes three feature-gated namespaces, each Pro-gated at runtime by the
+offline license (visible `isError` refusal on the community tier — never a silent
+downgrade; the `*.explain` tools are free prose):
+
+| Namespace | Cargo feature | Tools |
+| --------- | ------------- | ----- |
+| `slha.*` | `slhav2-full` | `explain`, `audit` (kernel self-audit), `compress` (codec-selectable: `int4`/`grouped`/`nf4`/`mixed`/`tq3`), `score`, `benchmark` |
+| `octa.*` | `octacore` | `explain`, `cascade_recall` (causal-narrow → exact-cosine rerank over the live session, read-only) |
+| `rsi.*` | `rsi` | `explain`, `status` (compiled capabilities + license gates) — **no execution tools by design**: DGM self-modification is unreachable over MCP |
+
+An `octasoma` build additionally advertises the `octa_feedback` tool (the
+relevance-feedback channel calibrating the `octa-semantic` conformal anchor gate).
 
 Each `tools/call` returns the corresponding `Serialize` type (above) as JSON inside
 the MCP `content[0].text` field. Tool-level failures come back as

@@ -45,6 +45,7 @@ fn main() {
     let pro = Licensing::licensed(License {
         licensee: "demo-operator".into(),
         expires_at: None,
+        machine: None,
     });
     let access = match RetrievalAccess::unlock(&pro, now) {
         Ok(a) => {

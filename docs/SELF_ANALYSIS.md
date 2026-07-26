@@ -27,7 +27,9 @@ consistency guard self-heals to the snapshot, but you lose timeline fidelity).
 ### Mode A — tool-driven (`.mcp.json`)
 
 The repo ships a project-scoped [`.mcp.json`](../.mcp.json) that registers `ccos mcp`
-as an MCP server. Open the repo in Claude Code, approve the server, and the agent
+as an MCP server — and `ccos setup` writes the same entry for you on any other
+project (idempotent, consent-gated; see [`SETUP.md`](SETUP.md)). Open the repo in
+Claude Code, approve the server, and the agent
 gains CCOS as native tools (`ingest`, `recall`, `signal_failure`, `page_fault`,
 `timeline`, `recall_what_if`, …) plus the `ccos://session/context` resource. The
 agent can *query* its memory live — but it has to call the tools itself, so this is

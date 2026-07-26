@@ -2,6 +2,10 @@
 
 Prioritized roadmap from the audit. Effort: S/M/L.
 
+> **CCOS_EXTENDED (premium fusion)** is tracked separately: architecture &
+> phasing in [`docs/FUSION_PLAN.md`](docs/FUSION_PLAN.md) (P0–P6 ✅), audit in
+> [`docs/AUDIT_FUSION_2026-07.md`](docs/AUDIT_FUSION_2026-07.md).
+
 ## 🚀 Direction — unbounded working memory (frugality × available RAM)
 
 "Infinite" working memory is a **direction**, not a literal claim. CCOS keeps the

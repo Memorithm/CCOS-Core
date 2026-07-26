@@ -15,3 +15,10 @@ scripts/causal_validation/results*.jsonl
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# Embedded CCOS_EXTENDED — premium source, never committed to free repo
+CCOS_EXTENDED/
+
+# Backup / temporary files
+*.bak
+workspace.ccos.oplog.bak.*

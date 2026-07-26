@@ -20,7 +20,7 @@ You only need a recent **stable** Rust toolchain (CI tracks current stable):
 ```bash
 rustup update stable
 rustup component add rustfmt clippy
-git clone <repo> && cd CCOS
+git clone <repo> && cd CCOS_EXTENDED
 cargo build --all-targets
 cargo test
 ```
@@ -35,9 +35,17 @@ locally CI will too:
 
 ```bash
 cargo fmt --all                          # format (CI runs --check)
-cargo clippy --all-targets -- -D warnings  # lint; warnings are errors
-cargo test                               # 212 unit + integration tests
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps   # docs must build clean
+cargo clippy --all-targets --all-features -- -D warnings  # lint; warnings are errors
+cargo test                               # the default-build unit + integration suite
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features  # docs must build clean
+```
+
+Touching a fused/premium module (`slha_full`, `octacore_bridge`, `rsi_bridge`,
+`mcp_ext`, a `crates/ccos-*` member)? Also run the profile that compiles it:
+
+```bash
+cargo test --features pro-default        # every deterministic premium tier
+cargo test --features all-full           # + the REPLAY-RELAX full kernels
 ```
 
 Useful extras:
@@ -62,9 +70,13 @@ third-party action can be blocked by org policy. Steps run cheapest-first
 | --- | ------- | -------- |
 | **Format** | `cargo fmt --all --check` | yes |
 | **Clippy** | `cargo clippy --all-targets --all-features --locked -- -D warnings` | yes |
-| **Test** | `cargo test` (default = real AST) **and** `cargo test --no-default-features` (heuristic fallback) | yes |
-| **Docs** | `cargo doc --no-deps` with `RUSTDOCFLAGS=-D warnings` | yes |
-| **CLI smoke** | `analyze → verify → replay → top → blame → export → chaos` | yes |
+| **Test (core matrix)** | `cargo test` (default = real AST), `--no-default-features` (heuristic fallback), then per-feature: `llm`, `learned-embed`, `license`, `license-pq`, `license,license-pq`, `octasoma` (+ example) | yes |
+| **Byte-identity guard** | default `cargo tree` must pull **no** premium crate (scirust / octasoma / octacore / rsi) | yes |
+| **Test (fused profiles)** | `cargo test --features pro-default` and `--features all-full` | yes |
+| **Test (fused members)** | `cargo test -p scirust -p slha-mcp -p slha-c -p ccos-memory-runtime -p octasoma -p octacore -p rsi` | yes |
+| **Premium CLI smoke** | `rsi status` / `slha explain` / `octa explain`, and community-tier `slha audit` must refuse with **exit 3** | yes |
+| **Docs** | `cargo doc --no-deps --all-features` with `RUSTDOCFLAGS=-D warnings` | yes |
+| **CLI smoke** | `analyze → verify → replay → top → blame → export → chaos → license → doctor` | yes |
 
 A broken command fails the smoke step even without a dedicated test. The slower
 `cargo audit` lives in `.github/workflows/audit.yml`, which runs **weekly** (and
