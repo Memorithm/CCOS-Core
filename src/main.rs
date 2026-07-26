@@ -3283,14 +3283,6 @@ COMMANDS:\n\
         --report <F>           Report path (default <dir>/setup_report.json)\n\
         --workspace <W>        Workspace the MCP server persists (default workspace.ccos)\n\
     license                    Show the active tier (community / PRO) and the Pro feature set\n\
-    license claim <CODE> --from <URL>  Redeem a one-time claim code against the vendor's\n\
-    \x20                          counter and install the single-seat license (sends only\n\
-    \x20                          hashes; token verified locally before install)\n\
-    license fingerprint        Print this machine's opaque fingerprint (for the\n\
-    \x20                          counter's web-form claim flow)\n\
-    update --from <URL>        Fetch the vendor's signed release manifest, verify it\n\
-    \x20                          against the baked-in key, enforce the license for Pro\n\
-    \x20                          artifacts, hash-check and install (--check, --yes)\n\
 \n\
   CCOS v0.3 — Autonomous Context Runtime:\n\
     scan <path>                Scan a real workspace and ingest the delta\n\
