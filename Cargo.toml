@@ -208,4 +208,11 @@ members = ["crates/ccos-memory-runtime"]
 rust-version = "1.89"
 license = "LicenseRef-TarekZekriti-Dual"
 
+# Model-provider integration tests (§36): compiled only with `llm`, every
+# test #[ignore]d — they run only on explicit request (see the file header).
+[[test]]
+name = "model_integration"
+path = "tests/model_integration/main.rs"
+required-features = ["llm"]
+
 

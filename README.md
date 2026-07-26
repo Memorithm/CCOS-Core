@@ -1,4 +1,17 @@
-# CCOS — Causal Context Operating System
+# CCOS Core — Causal Context Operating System
+
+> **CCOS Core** is the stable, deterministic and auditable cognitive kernel of
+> the CCOS product line: event-sourced memory, temporal validity, explicit
+> contradictions, invalidation, decision–outcome chains, replay and provenance —
+> model-provider independent, free of RSI/Forge/self-modification.
+>
+> Product line: **CCOS Core** (this repository) ·
+> [CCOS Enterprise](https://github.com/Memorithm/CCOS-Enterprise) (security,
+> governance, multi-tenancy) ·
+> [CCOS Research Lab](https://github.com/Memorithm/CCOS-Research-Lab)
+> (experimental RSI/Forge research — outside the certifiable boundary).
+>
+> Sole human maintainer: **ZEKRITI Tarek** (see GOVERNANCE.md).
 
 > A local, deterministic **cognitive MMU** for LLM coding agents: it keeps the
 > *right* code in the agent's context window, and makes the agent's attention
