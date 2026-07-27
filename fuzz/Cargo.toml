@@ -28,13 +28,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "revocation_list"
-path = "fuzz_targets/revocation_list.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "mcp_json"
 path = "fuzz_targets/mcp_json.rs"
 test = false
