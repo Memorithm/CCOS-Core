@@ -455,6 +455,26 @@ impl Default for CcosMemory {
 
 impl CcosMemory {
     /// An empty in-memory kernel with no checkpoint path.
+    ///
+    /// The paging cap is **fixed here on purpose**, not read from the
+    /// environment. `CCOS_MAX_RESIDENT` / `CCOS_PAGING_THRESHOLD` tune
+    /// `commands_runtime`, and wiring them in here through `new_from_env` looks
+    /// like the obvious consistency fix — it was tried and reverted, because it
+    /// buys nothing and breaks certification:
+    ///
+    /// * it is inert where it would matter. [`open`](Self::open) only constructs
+    ///   when the file is absent, and `max_in_memory_nodes` is a serialised
+    ///   field, so an existing workspace keeps its own cap regardless (measured:
+    ///   60 resident / 0 cold when reopening under `CCOS_MAX_RESIDENT=5`, versus
+    ///   5 / 55 for a fresh one);
+    /// * it makes the first-run self-test environment-sensitive. With
+    ///   `CCOS_MAX_RESIDENT=3` in the ambient environment, `ccos setup` drops
+    ///   from `6/6 checks passed` to `4/6 — NOT certified` (`causal recall` and
+    ///   `failure propagation` both fail), contradicting the
+    ///   deterministic-by-construction contract in `setup.rs`.
+    ///
+    /// Retuning a live workspace is [`set_max_resident`](Self::set_max_resident),
+    /// which re-pages explicitly instead of depending on ambient state.
     pub fn new() -> Self {
         CcosMemory {
             graph: MemoryGraph::new(0.2, 5000),
@@ -2840,5 +2860,53 @@ mod tests {
             "the cause is now resident"
         );
         assert!(!mem.graph.is_cold(&NodeId(cold_id)), "no longer cold");
+    }
+
+    #[test]
+    fn ensure_resident_makes_an_around_recall_on_a_demoted_anchor_non_empty() {
+        // The read-path page fault, stated as an invariant rather than a comment:
+        // `recall` takes `&self` and cannot page, so once the anchor has been
+        // demoted to COLD every entry point must call `ensure_resident` first.
+        // Measured on a real tree (300 files, cap 5000): the façade skipping this
+        // returned an empty window where MCP — which goes through
+        // `AgentSession::recall` — returned 31 items for the same anchor and budget.
+        let mut mem = CcosMemory::new();
+        mem.ingest_source("src/cfg.rs", "pub fn limit() -> u8 { 7 }\n");
+        mem.ingest_source(
+            "src/api.rs",
+            "use crate::cfg;\npub fn h() -> u8 { cfg::limit() }\n",
+        );
+        for i in 0..8 {
+            mem.ingest_source(&format!("src/pad{i}.rs"), "pub fn pad() -> u8 { 1 }\n");
+        }
+
+        // A cap that demotes the anchor but still leaves room for it and its
+        // region once paged back — the real deployment shape. (A cap so tight
+        // that the region cannot fit is the cap doing its job, not a bug.)
+        mem.graph.max_in_memory_nodes = 8;
+        mem.graph.enforce_paging();
+        let anchor = NodeId("file:src/api.rs".into());
+        assert!(
+            mem.graph.is_cold(&anchor),
+            "fixture must demote the anchor to COLD to be meaningful"
+        );
+
+        let cold_window = mem.recall(&Recall::around("file:src/api.rs"), 2048);
+        assert!(
+            cold_window.items.is_empty(),
+            "a demoted anchor is invisible without a page-in: {:?}",
+            cold_window.items
+        );
+
+        assert!(
+            mem.ensure_resident("file:src/api.rs") > 0,
+            "anchor paged in"
+        );
+        let win = mem.recall(&Recall::around("file:src/api.rs"), 2048);
+        assert!(
+            win.items.iter().any(|i| i.uri.contains("src/api.rs")),
+            "after the page fault the anchor is back in the window: {:?}",
+            win.items.iter().map(|i| &i.uri).collect::<Vec<_>>()
+        );
     }
 }
