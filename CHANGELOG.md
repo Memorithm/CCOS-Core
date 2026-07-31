@@ -40,6 +40,23 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   plus `signed-sync`) in both text and JSON output, so a premium deployment can
   verify at a glance that its build compiled the kernels it licensed.
 
+### Fixed
+
+- **`util::write_durable` no longer latches a transient I/O error into a
+  permanent one** — the temp sibling was named `<path>.tmp.<pid>`, opened with
+  `create_new`, and removed by no error path. Any failure between creating it
+  and renaming it (`set_permissions`, `write_all`, `sync_all`, `rename`) left the
+  file on disk, after which *every* later call in the same process failed with
+  `AlreadyExists` until a human deleted it. One ENOSPC or EIO thus became an
+  outage lasting the life of the process — for `ccos-license-server`, 500 on
+  every licence claim while `/healthz` stayed green, cleared only by a restart.
+  The temp file is now owned by an RAII guard that unlinks it unless the rename
+  succeeded (so neither `?` nor an unwind can skip cleanup), and its name is
+  unique per *attempt* (`<path>.tmp.<pid>.<n>`), so leftovers from a `SIGKILL`
+  or from a build predating the guard cannot block the next save either.
+  Durability semantics are unchanged: parent directories created, `0600` on
+  unix, `sync_all` before an atomic rename, best-effort directory fsync after.
+
 ## [0.4.0] — 2026-07-08 — CCOS_EXTENDED premium fusion
 
 The first CCOS_EXTENDED release: the CCOS 0.3 core fused with SLHAv2, OctaSoma
