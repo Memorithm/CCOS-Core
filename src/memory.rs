@@ -1400,32 +1400,49 @@ impl MemoryGraph {
     /// just-requested node is never the one bounced back out. Any archived edge
     /// whose other endpoint is resident is re-linked. Returns `true` if the node
     /// was cold and is now resident. Deterministic (tie-break on id).
+    /// Remonte une entrée **deep-spillée** d'un cran : son corps sérialisé est
+    /// refaulté depuis le blob (vérifié par hachage) et réinséré dans la carte
+    /// `cold`. `false` si le blob manque, a été altéré, ou n'est pas
+    /// désérialisable — un cold-miss, jamais une demi-restauration silencieuse.
+    ///
+    /// Extrait de [`page_in`] pour être réutilisable : ré-héberger une arête chez
+    /// un voisin deep-spillé exige de le ramener d'abord dans `cold`, puisque le
+    /// husk ne porte que l'adjacence et que les arêtes de l'entrée vivent dans le
+    /// blob de son corps.
+    fn fault_in_deep(&mut self, id: &NodeId) -> bool {
+        let Some(husk) = self.deep_get(id) else {
+            return false;
+        };
+        let body_hash = husk.body.hash;
+        match self
+            .spill
+            .as_ref()
+            .and_then(|cfg| cfg.store.get(&body_hash))
+            .and_then(|s| serde_json::from_str::<ColdNode>(&s).ok())
+        {
+            Some(node) => {
+                if let Some(hs) = self.husk_store.as_mut() {
+                    let _ = hs.delete(&id.0); // the husk leaves the on-disk tier
+                }
+                self.cold.insert(id.clone(), node);
+                // The husk's body blob is now unreferenced — the node is back with
+                // its content folded inline — so reclaim it unless another husk
+                // still shares it. (Without this, page-in orphans the blob: a slow
+                // disk leak no later `remove` can find.)
+                self.release_blob_if_orphan(&body_hash);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn page_in(&mut self, id: &NodeId) -> bool {
         // A deep-spilled entry lives as a compact husk in `cold_deep`: fault its
         // whole serialized node back (hash-verified) into the full COLD map first,
         // then the normal page-in path below runs unchanged. A missing / tampered /
         // undeserializable body is a cold-miss — never a silent half-restore.
-        if let Some(husk) = self.deep_get(id) {
-            let body_hash = husk.body.hash;
-            match self
-                .spill
-                .as_ref()
-                .and_then(|cfg| cfg.store.get(&body_hash))
-                .and_then(|s| serde_json::from_str::<ColdNode>(&s).ok())
-            {
-                Some(node) => {
-                    if let Some(hs) = self.husk_store.as_mut() {
-                        let _ = hs.delete(&id.0); // the husk leaves the on-disk tier
-                    }
-                    self.cold.insert(id.clone(), node);
-                    // The husk's body blob is now unreferenced — the node is back with
-                    // its content folded inline — so reclaim it unless another husk
-                    // still shares it. (Without this, page-in orphans the blob: a slow
-                    // disk leak no later `remove` can find.)
-                    self.release_blob_if_orphan(&body_hash);
-                }
-                None => return false,
-            }
+        if self.deep_contains(id) && !self.fault_in_deep(id) {
+            return false;
         }
         // Fault spilled content back from disk (verified by hash). A spilled entry
         // whose blob is missing/tampered, or whose store has been detached, is a
@@ -1490,9 +1507,23 @@ impl MemoryGraph {
                 if !known {
                     neighbour.edges.push(e);
                 }
+            } else if self.deep_contains(&other) && self.fault_in_deep(&other) {
+                // Far end deep-spilled: it is neither resident nor in `cold`, so
+                // without this it had nowhere to go and was destroyed — measured,
+                // 2 of 4 edges lost on a demote/deep-spill/page-in round trip.
+                // Fault it back one tier so it can take custody of the edge; the
+                // reverse-adjacency entry stays, as for a plain cold neighbour.
+                if let Some(neighbour) = self.cold.get_mut(&other) {
+                    let known = neighbour.edges.iter().any(|x| {
+                        x.source == e.source && x.target == e.target && x.edge_type == e.edge_type
+                    });
+                    if !known {
+                        neighbour.edges.push(e);
+                    }
+                }
             } else {
-                // Neither resident nor cold: the far endpoint has left the graph
-                // entirely, so the edge is genuinely stale.
+                // Neither resident, cold, nor deep-spilled: the far endpoint has
+                // left the graph entirely, so the edge is genuinely stale.
                 self.radj_del_edge(id, &other);
             }
         }
@@ -7269,5 +7300,74 @@ mod tests {
             before,
             "a demote/page-in round trip must preserve every edge"
         );
+    }
+
+    #[test]
+    fn paging_in_never_destroys_an_edge_to_a_deep_spilled_node() {
+        // Variante deep-spill de `paging_a_node_in_never_destroys_an_edge_to_a_
+        // still_cold_node`. Une arête archivée l'est d'UN seul côté ; si son autre
+        // extrémité a été deep-spillée vers l'index husk, elle n'est plus ni
+        // résidente ni dans `cold`, et la rendre à personne revient à la détruire.
+        // Le husk ne porte que l'adjacence : les arêtes de l'entrée vivent dans le
+        // blob de son corps.
+        let dir = std::env::temp_dir().join(format!("ccos-deepedge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let mut g = MemoryGraph::new(0.2, usize::MAX);
+        for n in ["a", "b", "c", "d"] {
+            g.upsert_node(
+                NodeId(n.into()),
+                n.into(),
+                format!("pub fn {n}() {{ /* corps assez long pour peser */ }}"),
+                NodeType::Symbol,
+            );
+        }
+        g.add_edge(
+            NodeId("a".into()),
+            NodeId("b".into()),
+            1.0,
+            EdgeType::DependsOn,
+        );
+        g.add_edge(NodeId("b".into()), NodeId("c".into()), 1.0, EdgeType::Calls);
+        g.add_edge(
+            NodeId("c".into()),
+            NodeId("d".into()),
+            1.0,
+            EdgeType::DependsOn,
+        );
+        g.add_edge(NodeId("a".into()), NodeId("d".into()), 1.0, EdgeType::Calls);
+
+        let fingerprint = |g: &MemoryGraph| {
+            let mut v: Vec<String> = g
+                .edges
+                .iter()
+                .map(|e| format!("{}->{}:{:?}", e.source.0, e.target.0, e.edge_type))
+                .collect();
+            v.sort();
+            v
+        };
+        let before = fingerprint(&g);
+        assert_eq!(before.len(), 4);
+
+        g.attach_cold_spill(&dir, 0).expect("attach");
+        // Tout démoter, puis pousser le tier COLD dans l'index husk : c'est la
+        // seule différence avec le test COLD résident, et elle suffisait à perdre
+        // des arêtes.
+        g.max_in_memory_nodes = 1;
+        g.enforce_paging();
+        g.set_cold_resident_budget(Some(0));
+        g.flush_cold_tier().expect("flush");
+
+        g.max_in_memory_nodes = usize::MAX;
+        for n in ["a", "b", "c", "d"] {
+            g.page_in(&NodeId(n.into()));
+        }
+
+        assert_eq!(
+            fingerprint(&g),
+            before,
+            "un aller-retour démotion/deep-spill/page-in doit préserver chaque arête"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
