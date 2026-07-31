@@ -362,6 +362,33 @@ fn missing_recall_arg(args: &Value) -> Option<&'static str> {
     }
 }
 
+/// Why `step` cannot be replayed faithfully, or `None` when it can.
+///
+/// `replay_to` clamps in both directions and cannot say that it did — it returns
+/// a memory, not a `Result`. Past the end it hands back the present; below the
+/// compaction floor it hands back the state *at* the floor. Either way the caller
+/// gets a well-formed window for a moment that is not the one it named, and for
+/// the tool whose entire job is answering "what did memory look like then" that is
+/// the one failure mode that matters. Measured on a 3-op timeline: `step: 9999`
+/// returned exactly what `step: 3` returned, with nothing marking the difference.
+fn unreplayable_step(session: &AgentSession, step: usize) -> Option<String> {
+    let (len, floor) = (session.len(), session.floor());
+    if step > len {
+        return Some(format!(
+            "step {step} is past the end of the timeline ({len} op(s) recorded)"
+        ));
+    }
+    // Step 0 is the empty baseline and always means "before anything happened".
+    if step > 0 && step < floor {
+        return Some(format!(
+            "step {step} is below the compaction floor ({floor}): that history has \
+             been folded into the baseline and cannot be replayed separately. The \
+             earliest faithful step is {floor} (raise CCOS_OPLOG_MAX to keep more)"
+        ));
+    }
+    None
+}
+
 /// The JSON-RPC refusal for a recall whose query argument is missing or blank.
 /// Names both the strategy and the field, since the usual cause is a caller that
 /// used the wrong key and has no way to see that from an empty window.
@@ -660,6 +687,9 @@ fn call_tool(
                 return Err(refuse_blank_recall(&args, arg));
             }
             let step = args.get("step").and_then(Value::as_u64).unwrap_or(0) as usize;
+            if let Some(why) = unreplayable_step(session, step) {
+                return Err((-32602, why));
+            }
             let window = session.recall_what_if(step, &recall_from_args(&args), budget);
             serde_json::to_string(&window).unwrap_or_default()
         }
@@ -2006,6 +2036,83 @@ mod tests {
         assert!(
             empty["result"]["content"][0]["text"].is_string(),
             "an explicitly empty source is legal: {empty}"
+        );
+    }
+
+    /// Time travel must refuse a moment it cannot reconstruct.
+    ///
+    /// `replay_to` clamps in both directions and cannot report that it did — it
+    /// returns a memory, not a `Result`. Past the end it hands back the present;
+    /// below the compaction floor it hands back the state *at* the floor. Either
+    /// way `recall_what_if` answered with a well-formed window for a moment that
+    /// is not the one it was asked about. Measured on a 3-op timeline before this
+    /// guard: `step: 9999` returned byte-for-byte what `step: 3` returned. For the
+    /// tool whose entire job is "what did memory look like then", that is the one
+    /// failure mode that matters.
+    #[test]
+    fn time_travel_refuses_a_step_it_cannot_reconstruct() {
+        let mut s = AgentSession::new();
+        for i in 0..3 {
+            s.ingest(&format!("src/f{i}.rs"), &format!("pub fn f{i}() {{}}\n"));
+        }
+        let what_if = |step: usize| {
+            req(
+                1,
+                "tools/call",
+                json!({ "name": "recall_what_if",
+                        "arguments": { "strategy": "working_set", "step": step } }),
+            )
+        };
+
+        // Every step that exists replays, including both ends. `recall_what_if` is
+        // read-only — it replays into a throwaway memory — so one session serves.
+        let last = s.len();
+        for step in 0..=last {
+            let r = handle(&mut s, &what_if(step)).unwrap();
+            assert!(
+                r["result"]["content"][0]["text"].is_string(),
+                "step {step} is in range and must replay: {r}"
+            );
+        }
+
+        // One past the end is already a moment that never happened.
+        let past_end = handle(&mut s, &what_if(last + 1)).unwrap();
+        assert_eq!(past_end["error"]["code"], -32602, "{past_end}");
+        assert!(
+            past_end["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("past the end"),
+            "{past_end}"
+        );
+
+        // Below the compaction floor the answer would be the floor's state wearing
+        // the requested step's name — the quieter and more misleading of the two.
+        let mut compacted = AgentSession::new();
+        for i in 0..40 {
+            compacted.ingest(&format!("src/g{i}.rs"), &format!("pub fn g{i}() {{}}\n"));
+        }
+        compacted.compact(10);
+        let floor = compacted.floor();
+        assert!(floor > 1, "fixture must actually compact, floor={floor}");
+
+        let below = handle(&mut compacted, &what_if(1)).unwrap();
+        assert_eq!(below["error"]["code"], -32602, "{below}");
+        let msg = below["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            msg.contains("compaction floor") && msg.contains(&floor.to_string()),
+            "the refusal must name the floor so the caller can pick a real step: {msg}"
+        );
+
+        // Step 0 stays legal: "before anything happened" is always reconstructible,
+        // and the floor never swallows it.
+        let zero = handle(&mut compacted, &what_if(0)).unwrap();
+        assert!(zero["result"]["content"][0]["text"].is_string(), "{zero}");
+        // And the floor itself is exactly the baseline, so it replays.
+        let at_floor = handle(&mut compacted, &what_if(floor)).unwrap();
+        assert!(
+            at_floor["result"]["content"][0]["text"].is_string(),
+            "{at_floor}"
         );
     }
 
