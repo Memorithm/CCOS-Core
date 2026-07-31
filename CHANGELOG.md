@@ -57,6 +57,20 @@ adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Durability semantics are unchanged: parent directories created, `0600` on
   unix, `sync_all` before an atomic rename, best-effort directory fsync after.
 
+- **`license::b64url_decode` now rejects non-canonical encodings** — a partial
+  group carries its bytes in more bits than it needs (twelve for one byte,
+  eighteen for two) and the spare low bits were never checked, so every byte
+  string had several accepted spellings. An ed25519 signature encodes to 86
+  symbols and `86 % 4 == 2`, which gave **every licence token 16 wire spellings
+  that all verified as the same machine-bound licence** — and 16 different
+  SHA-256 digests, so an offline revocation list keyed on `token_sha256` revoked
+  only one of them and the holder kept the other fifteen by editing a single
+  character. **Not a wire-format change:** `b64url_encode` has only ever emitted
+  the canonical spelling, so every token, sync bundle and PQ token the vendor has
+  signed still decodes; only hand-edited spellings stop working, which is the
+  point. Brings Core in line with `ccos-enterprise-governance`'s `b64url`, which
+  was already strict.
+
 ## [0.4.0] — 2026-07-08 — CCOS_EXTENDED premium fusion
 
 The first CCOS_EXTENDED release: the CCOS 0.3 core fused with SLHAv2, OctaSoma
