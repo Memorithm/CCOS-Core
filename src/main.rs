@@ -1387,9 +1387,13 @@ fn run_verify(file: Option<&str>) -> CliResult {
     }
     let snapshot = match KernelSnapshot::load(file) {
         Ok(s) => s,
-        Err(e) => {
-            return Err(CliError::fail(format!("ccos: cannot load '{file}': {e}")));
-        }
+        // Not a kernel snapshot. Before reporting a parse error, check whether it
+        // is the *other* thing `verify` is legitimately pointed at: a workspace
+        // written by `ccos memory`, which carries no timeline sidecar. Those files
+        // are perfectly valid and fully verifiable — they just have no recorded
+        // history — and reporting `missing field 'version'` at them said nothing a
+        // caller could act on.
+        Err(e) => return verify_memory_workspace(file, &e.to_string()),
     };
 
     let integrity = snapshot.dist_log.verify_integrity();
@@ -1425,6 +1429,58 @@ fn run_verify(file: Option<&str>) -> CliResult {
 
     if integrity.valid && log_integrity.valid && dangling == 0 {
         println!("\n  ✓ snapshot verified");
+        Ok(())
+    } else {
+        println!("\n  ✗ verification FAILED");
+        Err(CliError::status(1))
+    }
+}
+
+/// Verify a workspace that has no timeline sidecar — one written by
+/// `ccos memory`, whose ops go straight to the snapshot.
+///
+/// `verify` knew two shapes, a workspace *with* a sidecar and a kernel snapshot,
+/// and a `ccos memory` workspace is neither. It fell through to the snapshot
+/// loader and surfaced its serde error verbatim — `cannot load '…': missing field
+/// 'version'` — which reads as corruption for a file that is intact, fully
+/// verifiable, and produced by this same binary two commands earlier.
+///
+/// `snapshot_err` is what the kernel-snapshot loader said, kept for the case where
+/// the file really is neither thing.
+fn verify_memory_workspace(file: &str, snapshot_err: &str) -> CliResult {
+    use ccos_core::external_memory::{CcosMemory, ExternalMemory};
+
+    let Ok(mem) = CcosMemory::open(file) else {
+        return Err(CliError::fail(format!(
+            "ccos: cannot load '{file}': {snapshot_err}"
+        )));
+    };
+    let integrity = mem.verify();
+    let stats = mem.stats();
+
+    println!("╔══════════════════════════════════════════════╗");
+    println!("║  CCOS verify — {:<30}║", truncate(file, 30));
+    println!("╚══════════════════════════════════════════════╝\n");
+    println!(
+        "  Graph nodes/edges: {}/{} ({} file(s), {} cold)",
+        stats.nodes, stats.edges, stats.files, stats.cold
+    );
+    println!(
+        "  Event-log chain:   {} verified | valid: {}",
+        integrity.events, integrity.valid
+    );
+    for err in integrity.errors.iter().take(10) {
+        println!("    ! {err}");
+    }
+    println!("  Timeline sidecar:  none");
+    println!(
+        "\n  This workspace was written through `ccos memory`, which persists the\n  \
+         graph but records no op-log. Time-travel (`ccos postmortem`, `recall_what_if`)\n  \
+         needs the sidecar, which `ccos mcp` and `ccos setup` create and maintain."
+    );
+
+    if integrity.valid {
+        println!("\n  ✓ workspace verified (graph + event-log chain)");
         Ok(())
     } else {
         println!("\n  ✗ verification FAILED");
@@ -2951,6 +3007,19 @@ fn run_postmortem(args: &[String]) -> CliResult {
         println!("{}", serde_json::to_string_pretty(&record).unwrap());
         return Ok(());
     }
+    // A workspace written through `ccos memory` persists its graph but records no
+    // op-log, so there is nothing to step through. The debugger used to open on it
+    // anyway and report `0 steps`, which reads as "your history is gone" rather
+    // than "this workspace never kept one" — the two need very different reactions
+    // from whoever is staring at it.
+    if path.is_some() && session.is_empty() {
+        eprintln!(
+            "ccos postmortem: this workspace has no recorded timeline, so there is\n\
+             nothing to replay. Time-travel needs the `.oplog` sidecar, which\n\
+             `ccos mcp` and `ccos setup` maintain; `ccos memory` writes the graph\n\
+             only. `ccos verify <workspace>` reports what is there."
+        );
+    }
     ccos_core::postmortem::serve(session);
     Ok(())
 }
@@ -3349,6 +3418,48 @@ mod tests {
     /// Build an owned `Vec<String>` arg list from string literals.
     fn argv(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// `verify` must accept the workspace shape `ccos memory` writes.
+    ///
+    /// It knew a workspace-with-sidecar and a kernel snapshot; a `ccos memory`
+    /// workspace is neither, so it fell through to the snapshot loader and printed
+    /// that loader's serde error — `cannot load '…': missing field 'version'` — at
+    /// a file that is intact, fully verifiable, and was produced by this same
+    /// binary. A file that really is neither must still be reported as unloadable.
+    #[test]
+    fn verify_accepts_a_workspace_with_no_timeline_sidecar() {
+        use ccos_core::external_memory::{CcosMemory, ExternalMemory};
+        let dir =
+            std::env::temp_dir().join(format!("ccos-verify-nosidecar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Exactly what `ccos memory` leaves behind: a snapshot, no `.oplog`.
+        let ws = dir.join("ws.ccos");
+        let mut mem = CcosMemory::open(&ws).unwrap();
+        mem.ingest_source("src/a.rs", "pub fn a() {}\n");
+        mem.checkpoint().unwrap();
+        assert!(
+            !dir.join("ws.ccos.oplog").exists(),
+            "the fixture must have no sidecar, or it tests the other branch"
+        );
+
+        assert!(
+            run_verify(Some(ws.to_str().unwrap())).is_ok(),
+            "a sidecar-less workspace still verifies"
+        );
+
+        // Something that is genuinely neither shape is still an error, and the
+        // message is the loader's, not a misleading success.
+        let bad = dir.join("bad.ccos");
+        std::fs::write(&bad, b"not json at all").unwrap();
+        assert!(
+            run_verify(Some(bad.to_str().unwrap())).is_err(),
+            "an unloadable file must still fail"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
