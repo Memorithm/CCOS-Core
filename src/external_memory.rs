@@ -353,8 +353,19 @@ pub trait ExternalMemory {
     /// [`MemoryError::NodeNotFound`] if the node is absent.
     fn signal_failure(&mut self, node: &str, depth: u32) -> Result<usize, MemoryError>;
 
-    /// Select a bounded context window under a [`Recall`] strategy and a token
-    /// budget. Deterministic: ties break on the node id.
+    /// Select a context window under a [`Recall`] strategy and a token budget.
+    /// Deterministic: ties break on the node id.
+    ///
+    /// `budget_tokens` is a target, **not a hard cap**. One item is always
+    /// returned when the strategy finds any, even if that single item is larger
+    /// than the whole budget — an empty window helps no caller, and the only
+    /// alternative to overshooting is returning nothing. Measured on a real
+    /// workspace: `budget: 256` against a large anchor yields one item and
+    /// [`RecallWindow::tokens`] `= 328`.
+    ///
+    /// Past that first item the budget is respected. A caller sizing a prompt
+    /// against a hard context limit must therefore read `tokens` rather than
+    /// assume the budget it passed; that field always reports the real total.
     fn recall(&self, recall: &Recall, budget_tokens: usize) -> RecallWindow;
 
     /// Verify the hash chain is intact (tamper-evidence over the whole history).
@@ -2609,6 +2620,50 @@ mod tests {
         // At least the origin's own symbols are reachable; never panics.
         let _ = n;
         assert!(mem.verify().valid);
+    }
+
+    /// The token budget is a target, not a hard cap — and the window says so.
+    ///
+    /// One item is always returned when the strategy finds any, so a single item
+    /// larger than the whole budget overshoots it. That is deliberate (an empty
+    /// window helps no caller), but the trait doc called the result "bounded ...
+    /// under a token budget", which reads as a guarantee a caller can size a
+    /// prompt against. It cannot. What it *can* rely on is `tokens`, which always
+    /// reports the real total — pinned here so the two never drift apart again.
+    #[test]
+    fn the_recall_budget_is_a_target_and_tokens_reports_the_truth() {
+        let mut mem = CcosMemory::new();
+        // A file with many symbols: its node carries a synthesized summary of every
+        // signature, which is what makes a single item outgrow a small budget.
+        let big: String = (0..200)
+            .map(|i| format!("pub fn some_reasonably_named_function_{i}(x: u64) -> u64 {{ x }}\n"))
+            .collect();
+        mem.ingest_source("src/big.rs", &big);
+
+        let tiny_budget = 64;
+        let win = mem.recall(&Recall::around("file:src/big.rs"), tiny_budget);
+        assert!(
+            !win.items.is_empty(),
+            "a window with something to say is never empty, whatever the budget"
+        );
+        assert!(
+            win.tokens > tiny_budget,
+            "this fixture must actually overshoot, or it pins nothing: {} tokens",
+            win.tokens
+        );
+
+        // The honesty that makes the overshoot survivable: `tokens` is the real
+        // size of what was handed back, not the budget that was asked for.
+        let real: usize = win
+            .items
+            .iter()
+            .map(|i| i.content.chars().count() / 4)
+            .sum();
+        assert_eq!(win.tokens, real, "tokens must count what is actually there");
+
+        // And with room to work in, the budget is respected.
+        let roomy = mem.recall(&Recall::around("file:src/big.rs"), 100_000);
+        assert!(roomy.tokens <= 100_000);
     }
 
     #[test]
