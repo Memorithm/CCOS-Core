@@ -2852,7 +2852,30 @@ fn run_op_stream(mem: &mut CcosMemory) -> (bool, bool) {
             }
             "recall" => {
                 let budget = req["budget"].as_u64().unwrap_or(2048) as usize;
-                let recall = match req["strategy"].as_str().unwrap_or("working_set") {
+                let strategy = req["strategy"].as_str().unwrap_or("working_set");
+                // An anchored or free-text strategy without its query is a malformed
+                // request, not a memory that holds nothing. Answering it with a
+                // well-formed empty window made a caller's typo indistinguishable
+                // from an empty workspace: `{"strategy":"task","task":"NdLinear"}`
+                // — the field is `text` — returned `{"items":[],"tokens":0}` with no
+                // hint, on a workspace where the same query under the right key
+                // returns 15 items.
+                let needed = match strategy {
+                    "around" if s("anchor").trim().is_empty() => Some("anchor"),
+                    "task" | "semantic" | "hybrid" if s("text").trim().is_empty() => Some("text"),
+                    _ => None,
+                };
+                if let Some(field) = needed {
+                    had_error = true;
+                    println!(
+                        "{}",
+                        err(format!(
+                            "recall strategy '{strategy}' requires a non-empty '{field}'"
+                        ))
+                    );
+                    continue;
+                }
+                let recall = match strategy {
                     "around" => Recall::around(s("anchor")),
                     "task" => Recall::task(s("text")),
                     "semantic" => Recall::semantic(s("text")),

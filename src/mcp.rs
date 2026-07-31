@@ -339,6 +339,43 @@ fn normalize_node(s: &str) -> String {
     }
 }
 
+/// Name of the argument a strategy needs, when it is missing or blank.
+///
+/// An anchored or free-text strategy without its query is not a recall that found
+/// nothing — it is a request that was never asked. Answering it with a well-formed
+/// empty window makes a caller's typo look like an empty memory: the window has
+/// the right shape, the right strategy label, and zero items, so nothing
+/// downstream has any reason to doubt it. Naming the missing field instead is the
+/// difference between "you asked wrong" and "there is nothing there".
+fn missing_recall_arg(args: &Value) -> Option<&'static str> {
+    let blank = |k: &str| str_arg(args, k).trim().is_empty();
+    match args
+        .get("strategy")
+        .and_then(Value::as_str)
+        .unwrap_or("working_set")
+    {
+        "around" if blank("anchor") => Some("anchor"),
+        "task" | "semantic" | "hybrid" | "octa-semantic" | "octa_semantic" if blank("text") => {
+            Some("text")
+        }
+        _ => None,
+    }
+}
+
+/// The JSON-RPC refusal for a recall whose query argument is missing or blank.
+/// Names both the strategy and the field, since the usual cause is a caller that
+/// used the wrong key and has no way to see that from an empty window.
+fn refuse_blank_recall(args: &Value, arg: &str) -> (i64, String) {
+    let strategy = args
+        .get("strategy")
+        .and_then(Value::as_str)
+        .unwrap_or("working_set");
+    (
+        -32602,
+        format!("recall strategy '{strategy}' requires a non-empty '{arg}'"),
+    )
+}
+
 /// Build a [`Recall`] strategy from `{strategy, anchor, text}` arguments. Shared
 /// by `recall` and the time-travel `recall_what_if`.
 fn recall_from_args(args: &Value) -> Recall {
@@ -588,6 +625,9 @@ fn call_tool(
             }
         }
         "recall" => {
+            if let Some(arg) = missing_recall_arg(&args) {
+                return Err(refuse_blank_recall(&args, arg));
+            }
             #[cfg(feature = "octasoma")]
             if args.get("strategy").and_then(Value::as_str) == Some("octa-semantic") {
                 return octa_semantic_recall(session, state, &args, budget);
@@ -605,6 +645,9 @@ fn call_tool(
         "verify" => serde_json::to_string(&session.memory().verify()).unwrap_or_default(),
         "timeline" => json!({ "timeline": session.timeline() }).to_string(),
         "recall_what_if" => {
+            if let Some(arg) = missing_recall_arg(&args) {
+                return Err(refuse_blank_recall(&args, arg));
+            }
             let step = args.get("step").and_then(Value::as_u64).unwrap_or(0) as usize;
             let window = session.recall_what_if(step, &recall_from_args(&args), budget);
             serde_json::to_string(&window).unwrap_or_default()
@@ -1842,6 +1885,77 @@ mod tests {
             stats["result"]["isError"].is_null(),
             "read-only calls stay unmarked: {stats}"
         );
+    }
+
+    /// A recall missing its query must be refused, not answered with an empty
+    /// window.
+    ///
+    /// The window a blank query produced was perfectly well-formed — right
+    /// strategy label, zero items, zero tokens — so a caller that used the wrong
+    /// argument name could not tell its typo from an empty memory. Measured on a
+    /// real 165-file workspace: `{"strategy":"task","task":"NdLinear"}` (the field
+    /// is `text`) returned nothing, while the same query under `text` returned 15
+    /// items and filled the whole 2048-token budget.
+    #[test]
+    fn a_recall_without_its_query_is_refused_not_answered_with_an_empty_window() {
+        let mut s = AgentSession::new();
+        s.ingest("src/db.rs", "pub fn query() {}\n");
+
+        let call = |name: &str, args: Value| {
+            req(1, "tools/call", json!({ "name": name, "arguments": args }))
+        };
+
+        for (strategy, present, absent) in [
+            ("around", "anchor", "text"),
+            ("task", "text", "anchor"),
+            ("semantic", "text", "anchor"),
+            ("hybrid", "text", "anchor"),
+        ] {
+            // The wrong key, which is what a caller actually gets wrong.
+            let mut s2 = AgentSession::new();
+            s2.ingest("src/db.rs", "pub fn query() {}\n");
+            let wrong = handle(
+                &mut s2,
+                &call("recall", json!({ "strategy": strategy, absent: "query" })),
+            )
+            .unwrap();
+            assert_eq!(
+                wrong["error"]["code"], -32602,
+                "{strategy} with only '{absent}' must be refused: {wrong}"
+            );
+            let msg = wrong["error"]["message"].as_str().unwrap_or_default();
+            assert!(
+                msg.contains(present) && msg.contains(strategy),
+                "the refusal must name the strategy and the field it wants: {msg}"
+            );
+
+            // Blank is the same as absent — a caller passing "" asked nothing.
+            let blank = handle(
+                &mut s2,
+                &call("recall", json!({ "strategy": strategy, present: "   " })),
+            )
+            .unwrap();
+            assert_eq!(blank["error"]["code"], -32602, "{strategy} blank: {blank}");
+        }
+
+        // The strategy that genuinely needs no query is untouched.
+        let ws = handle(
+            &mut s,
+            &call("recall", json!({ "strategy": "working_set" })),
+        )
+        .unwrap();
+        assert!(
+            ws["result"]["content"][0]["text"].is_string(),
+            "working_set still answers without a query: {ws}"
+        );
+
+        // And `recall_what_if` guards the same way — it takes the same arguments.
+        let what_if = handle(
+            &mut s,
+            &call("recall_what_if", json!({ "strategy": "around", "step": 0 })),
+        )
+        .unwrap();
+        assert_eq!(what_if["error"]["code"], -32602, "{what_if}");
     }
 
     #[test]
