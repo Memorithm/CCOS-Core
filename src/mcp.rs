@@ -362,6 +362,42 @@ fn missing_recall_arg(args: &Value) -> Option<&'static str> {
     }
 }
 
+/// The first argument a tool's own advertised schema marks `required` and the
+/// call did not supply, if any.
+///
+/// The catalogue in [`tool_specs`] is a promise: `"required": ["output"]` tells a
+/// client the call is invalid without it. Nothing enforced that promise, and three
+/// tools quietly took the omission as a default — `page_fault` with no compiler
+/// output recalled a plain working set and labelled it a page-fault result,
+/// `recall_what_if` with no step replayed step 0 and returned an empty window,
+/// `signal_failure` with no node reported "node not found: file:" as though the
+/// caller had named a node that was missing.
+///
+/// Enforcing the declaration rather than hand-writing a check per tool means the
+/// schema stays the single statement of what a call needs, and any tool added
+/// later is covered the moment it declares.
+///
+/// Presence only — that is what `required` means in JSON Schema. Whether an
+/// *empty* value is also meaningless is a per-tool question: `ingest` with
+/// `source: ""` is a legitimately empty file, `page_fault` with `output: ""` is
+/// not a page fault.
+fn missing_required_arg(tool: &str, args: &Value) -> Option<String> {
+    static SPECS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+    let specs = SPECS.get_or_init(tool_specs);
+    let required = specs
+        .as_array()?
+        .iter()
+        .find(|t| t["name"] == tool)?
+        .get("inputSchema")?
+        .get("required")?
+        .as_array()?;
+    required
+        .iter()
+        .filter_map(Value::as_str)
+        .find(|key| args.get(*key).is_none())
+        .map(str::to_string)
+}
+
 /// Why `step` cannot be replayed faithfully, or `None` when it can.
 ///
 /// `replay_to` clamps in both directions and cannot say that it did — it returns
@@ -629,6 +665,11 @@ fn call_tool(
         .cloned()
         .unwrap_or_else(|| json!({}));
     let budget = args.get("budget").and_then(Value::as_u64).unwrap_or(2048) as usize;
+    // Hold the catalogue to its own word before dispatching — see
+    // `missing_required_arg`.
+    if let Some(arg) = missing_required_arg(name, &args) {
+        return Err((-32602, format!("{name} requires '{arg}'")));
+    }
 
     let text = match name {
         "ingest" => {
@@ -676,6 +717,12 @@ fn call_tool(
         #[cfg(feature = "octasoma")]
         "octa_feedback" => return octa_feedback_tool(session, state, &args),
         "page_fault" => {
+            // Presence is not enough here: an empty compiler output names no
+            // faulting file, so the fault degrades to a plain working-set recall
+            // that still comes back looking like a page-fault result.
+            if str_arg(&args, "output").trim().is_empty() {
+                return Err((-32602, "page_fault requires a non-empty 'output'".into()));
+            }
             serde_json::to_string(&session.page_fault(&str_arg(&args, "output"), budget))
                 .unwrap_or_default()
         }
@@ -686,7 +733,11 @@ fn call_tool(
             if let Some(arg) = missing_recall_arg(&args) {
                 return Err(refuse_blank_recall(&args, arg));
             }
-            let step = args.get("step").and_then(Value::as_u64).unwrap_or(0) as usize;
+            // A `step` that is present but not a number would fall through
+            // `as_u64` to 0 and silently replay the empty baseline.
+            let Some(step) = args.get("step").and_then(Value::as_u64).map(|s| s as usize) else {
+                return Err((-32602, "recall_what_if 'step' must be a number".into()));
+            };
             if let Some(why) = unreplayable_step(session, step) {
                 return Err((-32602, why));
             }
@@ -2223,6 +2274,113 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Every argument the catalogue marks `required` must actually be required.
+    ///
+    /// `"required": ["output"]` in an advertised schema tells a client the call is
+    /// invalid without it. Nothing enforced that, and three tools took the
+    /// omission as a default instead: `page_fault` with no compiler output
+    /// recalled a plain working set and returned it looking like a page-fault
+    /// result, `recall_what_if` with no step replayed step 0 and returned an empty
+    /// window, `signal_failure` with no node answered "node not found: file:" as
+    /// though a node had been named and was missing.
+    ///
+    /// Driven off the catalogue rather than a hand-written list, so a tool added
+    /// later cannot quietly opt out of its own declaration.
+    #[test]
+    fn every_declared_required_argument_is_enforced() {
+        let specs = tool_specs();
+        let mut checked = 0;
+        for spec in specs.as_array().expect("catalogue is an array") {
+            let name = spec["name"].as_str().expect("tool has a name");
+            let Some(required) = spec["inputSchema"]["required"].as_array() else {
+                continue;
+            };
+            for key in required.iter().filter_map(Value::as_str) {
+                // Supply every *other* required key, so the refusal can only be
+                // about the one left out.
+                let mut args = serde_json::Map::new();
+                for other in required.iter().filter_map(Value::as_str) {
+                    if other != key {
+                        args.insert(other.to_string(), json!("x"));
+                    }
+                }
+                let mut s = AgentSession::new();
+                s.ingest("src/a.rs", "pub fn a() {}\n");
+                let r = handle(
+                    &mut s,
+                    &req(
+                        1,
+                        "tools/call",
+                        json!({ "name": name, "arguments": Value::Object(args) }),
+                    ),
+                )
+                .unwrap();
+                assert_eq!(
+                    r["error"]["code"], -32602,
+                    "{name} declares '{key}' required but accepted the call: {r}"
+                );
+                assert!(
+                    r["error"]["message"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains(key),
+                    "the refusal must name the missing argument: {r}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 9, "expected the whole catalogue, saw {checked}");
+    }
+
+    /// Presence is not always enough, and emptiness does not always mean absent.
+    #[test]
+    fn empty_values_are_judged_per_tool_not_uniformly() {
+        let mut s = AgentSession::new();
+
+        // An empty compiler output names no faulting file, so the "page fault"
+        // would be an ordinary working-set recall wearing the wrong label.
+        let blank_fault = handle(
+            &mut s,
+            &req(
+                1,
+                "tools/call",
+                json!({ "name": "page_fault", "arguments": { "output": "   " } }),
+            ),
+        )
+        .unwrap();
+        assert_eq!(blank_fault["error"]["code"], -32602, "{blank_fault}");
+
+        // An empty *file* is a real thing and must still ingest.
+        let empty_file = handle(
+            &mut s,
+            &req(
+                1,
+                "tools/call",
+                json!({ "name": "ingest",
+                        "arguments": { "uri": "file:empty.rs", "source": "" } }),
+            ),
+        )
+        .unwrap();
+        assert!(
+            empty_file["result"]["content"][0]["text"].is_string(),
+            "{empty_file}"
+        );
+
+        // A `step` that is present but not a number fell through `as_u64` to 0 and
+        // silently replayed the empty baseline.
+        let bad_step = handle(
+            &mut s,
+            &req(
+                1,
+                "tools/call",
+                json!({ "name": "recall_what_if",
+                        "arguments": { "strategy": "working_set", "step": "2" } }),
+            ),
+        )
+        .unwrap();
+        assert_eq!(bad_step["error"]["code"], -32602, "{bad_step}");
     }
 
     #[test]
