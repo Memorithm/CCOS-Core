@@ -241,11 +241,11 @@ fn tool_specs() -> Value {
         },
         {
             "name": "sync",
-            "description": "Boot/refresh ack: checkpoint the session so in-memory state is durable, and report the current timeline step. OpenClaw calls this at gateway boot and on explicit refresh. Read-only to the index (the causal graph is derived state); `force` flushes even when no oplog path is bound (a no-op there).",
+            "description": "Boot/refresh ack: checkpoint the session so in-memory state is durable, and report the current timeline step. OpenClaw calls this at gateway boot and on explicit refresh. Read-only to the index (the causal graph is derived state) — it writes the snapshot, it does not change the graph. Fails visibly if the workspace could not be written; a no-op when no workspace is bound.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "force": {"type": "boolean", "description": "flush even when no persistence path is bound (default false)"},
+                    "force": {"type": "boolean", "description": "accepted for compatibility; the checkpoint is unconditional, so this changes nothing"},
                     "reason": {"type": "string", "description": "free-text reason for the sync (e.g. 'boot'); recorded for diagnostics only"}
                 }
             }
@@ -872,8 +872,27 @@ fn call_tool(
             }
         }
         "sync" => {
-            if args.get("force").and_then(Value::as_bool).unwrap_or(false) {
-                let _ = session.checkpoint();
+            // `sync` is the boot/refresh acknowledgement a gateway calls to confirm
+            // the session is durable — making it durable is the whole job. Two
+            // things were wrong with that.
+            //
+            // It discarded the checkpoint result (`let _ = session.checkpoint()`)
+            // and answered `ok: true` regardless, so a gateway got a clean boot ack
+            // for a session that had persisted nothing; the only trace was a stderr
+            // line no MCP client reads.
+            //
+            // And it only checkpointed under `force`, while its description has
+            // always said it checkpoints — so the default call, the one a gateway
+            // actually makes at boot, persisted nothing at all. The description is
+            // the contract worth keeping, so the checkpoint is now unconditional
+            // and `force` stays accepted but inert rather than quietly deciding
+            // whether the promise holds. `NoPath` is still success: a session with
+            // no workspace bound was never asked to persist anything.
+            if let Err(e) = persist(session) {
+                return Err((
+                    -32603,
+                    format!("sync could not make the session durable: {e}"),
+                ));
             }
             json!({
                 "step": session.timeline().len(),
@@ -2114,6 +2133,96 @@ mod tests {
             at_floor["result"]["content"][0]["text"].is_string(),
             "{at_floor}"
         );
+    }
+
+    /// `sync` must persist, and must not answer `ok: true` when it could not.
+    ///
+    /// `sync` is the boot/refresh acknowledgement a gateway calls to confirm the
+    /// session is durable — making it durable is the whole job — and it failed at
+    /// that job twice over. It discarded the checkpoint result
+    /// (`let _ = session.checkpoint()`) and answered `{"ok":true,…}` regardless,
+    /// so a gateway got a clean boot ack for a session that had persisted nothing;
+    /// the only trace was a stderr line no MCP client reads. And it only
+    /// checkpointed under `force`, while its description has always said it
+    /// checkpoints — so the *default* call, the one a gateway actually makes at
+    /// boot, wrote nothing at all.
+    ///
+    /// Same shape as the `ingest` case, but worse: for `ingest`, durability is a
+    /// side effect; here it is the entire contract.
+    #[test]
+    fn sync_persists_and_reports_a_flush_that_failed() {
+        let root = std::env::temp_dir().join(format!("ccos-sync-force-{}", std::process::id()));
+        let dir = root.join("ws");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut session = AgentSession::open(dir.join("workspace.ccos")).unwrap();
+        session.ingest("src/a.rs", "pub fn a() {}\n");
+
+        let sync = req(
+            1,
+            "tools/call",
+            json!({ "name": "sync", "arguments": { "force": true } }),
+        );
+        // The default call — no `force` — is the one a gateway makes at boot, and
+        // it is the one that used to write nothing.
+        let plain_sync = req(1, "tools/call", json!({ "name": "sync" }));
+
+        let acked = handle(&mut session, &plain_sync).unwrap();
+        assert!(
+            acked["result"]["content"][0]["text"].is_string(),
+            "a plain sync acks: {acked}"
+        );
+        assert!(
+            dir.join("workspace.ccos").is_file(),
+            "…and it must actually have written the workspace"
+        );
+
+        let healthy = handle(&mut session, &sync).unwrap();
+        assert!(
+            healthy["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("\"ok\":true"),
+            "a healthy flush still acks: {healthy}"
+        );
+
+        // Break the workspace the same way as elsewhere in this file: a regular
+        // file where the directory was, so `create_dir_all` fails outright and no
+        // chmod is involved (CI may run as root).
+        std::fs::remove_dir_all(&dir).unwrap();
+        std::fs::write(&dir, b"not a directory").unwrap();
+
+        for (label, call) in [("force", &sync), ("plain", &plain_sync)] {
+            let refused = handle(&mut session, call).unwrap();
+            assert_eq!(
+                refused["error"]["code"], -32603,
+                "{label} sync must not ack a failed flush: {refused}"
+            );
+        }
+        let broken = handle(&mut session, &sync).unwrap();
+        assert_eq!(
+            broken["error"]["code"], -32603,
+            "a failed flush must not ack: {broken}"
+        );
+        assert!(
+            broken["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("durable"),
+            "{broken}"
+        );
+
+        // A session with nothing bound is not a failure: `force` is documented as
+        // a no-op there, and it must stay one.
+        let mut unbound = AgentSession::new();
+        unbound.ingest("src/a.rs", "pub fn a() {}\n");
+        let no_path = handle(&mut unbound, &sync).unwrap();
+        assert!(
+            no_path["result"]["content"][0]["text"].is_string(),
+            "an unbound session still acks: {no_path}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
