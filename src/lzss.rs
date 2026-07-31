@@ -239,7 +239,7 @@ mod tests {
 
     // ── Format 2 : dictionnaire partagé ──────────────────────────────────────
 
-    fn sample_dict() -> Dict {
+    fn sample_dict() -> std::sync::Arc<Dict> {
         // Un dictionnaire réaliste : du code qui ressemble à ce que le tier COLD
         // spille réellement (des contenus de nœuds d'un même projet Rust).
         let mut d = Vec::new();
@@ -251,10 +251,10 @@ mod tests {
                 .as_bytes(),
             );
         }
-        Dict::new(d)
+        std::sync::Arc::new(Dict::new(d))
     }
 
-    fn round_trip_v2(c: &mut Compressor<'_>, dict: &[u8], data: &[u8]) {
+    fn round_trip_v2(c: &mut Compressor, dict: &[u8], data: &[u8]) {
         let blob = c.compress_with(data);
         assert_eq!(
             decompress_with(&blob, Some(dict)).as_deref(),
@@ -273,7 +273,7 @@ mod tests {
     #[test]
     fn v2_round_trips_and_never_regresses_on_realistic_content() {
         let dict = sample_dict();
-        let mut c = Compressor::new(&dict);
+        let mut c = Compressor::new(dict.clone());
         for text in [
             "pub fn helper_7(input: &str) -> Result<usize> {\n    Ok(input.len())\n}\n",
             "pub fn something_else() {}\n",
@@ -304,7 +304,7 @@ mod tests {
         // Le contrat du tier COLD : à défaut de pouvoir restaurer, on rate — on ne
         // rend jamais un contenu faux.
         let dict = sample_dict();
-        let mut c = Compressor::new(&dict);
+        let mut c = Compressor::new(dict.clone());
         let payload = b"pub fn helper_3(input: &str) -> Result<usize> {\n    Ok(input.len())\n}\n";
         let blob = c.compress_with(payload);
         if blob[0] == 2 {
@@ -318,12 +318,12 @@ mod tests {
         // produire les mêmes octets, sinon la déduplication casse.
         let dict = sample_dict();
         let payload = b"pub fn helper_11(input: &str) -> Result<usize> {\n    Ok(input.len())\n}\n";
-        let a = Compressor::new(&dict).compress_with(payload);
-        let b = Compressor::new(&dict).compress_with(payload);
+        let a = Compressor::new(dict.clone()).compress_with(payload);
+        let b = Compressor::new(dict.clone()).compress_with(payload);
         assert_eq!(a, b);
         // Et un compresseur réutilisé doit rendre le même résultat qu'un neuf,
         // ce qui vérifie que la table de hachage est bien restaurée entre blobs.
-        let mut reused = Compressor::new(&dict);
+        let mut reused = Compressor::new(dict.clone());
         let _ = reused.compress_with(b"un autre contenu quelconque\n");
         assert_eq!(reused.compress_with(payload), a);
     }
@@ -334,7 +334,7 @@ mod tests {
         #[test]
         fn v2_round_trips_any_bytes(data: Vec<u8>) {
             let dict = sample_dict();
-            let mut c = Compressor::new(&dict);
+            let mut c = Compressor::new(dict.clone());
             let blob = c.compress_with(&data);
             let back = decompress_with(&blob, Some(dict.bytes()));
             prop_assert_eq!(back.as_deref(), Some(&data[..]));
@@ -347,7 +347,7 @@ mod tests {
             // Des entrées qui ressemblent au dictionnaire : le cas que le format 2
             // est censé exploiter, et celui où un décalage d'offset se verrait.
             let dict = sample_dict();
-            let mut c = Compressor::new(&dict);
+            let mut c = Compressor::new(dict.clone());
             let data = format!("pub fn helper_{idx}(input: &str) -> Result<usize> {{\n    Ok(input.len())\n}}\n")
                 .repeat(reps)
                 .into_bytes();
@@ -421,6 +421,16 @@ pub struct Dict {
     prev: Vec<i32>,
 }
 
+impl std::fmt::Debug for Dict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Les tables d'index n'ont aucun intérêt à l'affichage ; seule la taille
+        // du dictionnaire renseigne.
+        f.debug_struct("Dict")
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
+}
+
 impl Dict {
     /// Indexe `bytes` comme dictionnaire partagé.
     pub fn new(bytes: Vec<u8>) -> Self {
@@ -449,22 +459,36 @@ impl Dict {
 /// Compresseur réutilisable lié à un [`Dict`]. Le dictionnaire reste en place dans
 /// le tampon de travail d'un blob à l'autre, et la table de hachage n'est jamais
 /// clonée : les entrées touchées sont journalisées puis restaurées.
-pub struct Compressor<'d> {
-    dict: &'d Dict,
+#[derive(Clone)]
+pub struct Compressor {
+    dict: std::sync::Arc<Dict>,
     buf: Vec<u8>,
     head: Vec<i32>,
     prev: Vec<i32>,
     journal: Vec<(u32, i32)>,
 }
 
-impl<'d> Compressor<'d> {
-    pub fn new(dict: &'d Dict) -> Self {
+impl std::fmt::Debug for Compressor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Compressor")
+            .field("dict", &self.dict)
+            .finish()
+    }
+}
+
+impl Compressor {
+    /// Le dictionnaire est **partagé** (`Arc`) plutôt qu'emprunté : un compresseur
+    /// doit pouvoir vivre aussi longtemps que le store qui l'utilise. Le construire
+    /// recopie les tables du dictionnaire, ce qui est négligeable une fois — mais
+    /// annulerait le gain de débit s'il était reconstruit à chaque blob. Garder un
+    /// compresseur vivant est donc un choix de conception, pas un détail.
+    pub fn new(dict: std::sync::Arc<Dict>) -> Self {
         Compressor {
-            dict,
             buf: dict.bytes.clone(),
             head: dict.head.clone(),
             prev: dict.prev.clone(),
             journal: Vec::new(),
+            dict,
         }
     }
 
