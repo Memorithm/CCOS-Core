@@ -609,6 +609,17 @@ fn call_tool(
             if uri.is_empty() {
                 return Err((-32602, "ingest requires 'uri' and 'source'".into()));
             }
+            // The message has always claimed both are required; only `uri` was
+            // checked, so an `ingest` with no `source` succeeded and put an empty
+            // node in the graph — a file that exists, in the memory, with no
+            // content, which nothing downstream can tell from a real empty file.
+            // `source: ""` stays legal; the absent key is what is refused.
+            if args.get("source").is_none() {
+                return Err((
+                    -32602,
+                    "ingest requires 'source' (pass \"\" for an empty file)".into(),
+                ));
+            }
             serde_json::to_string(&session.ingest(&uri, &str_arg(&args, "source")))
                 .unwrap_or_default()
         }
@@ -1956,6 +1967,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(what_if["error"]["code"], -32602, "{what_if}");
+    }
+
+    /// `ingest` must not accept a request with no `source`.
+    ///
+    /// Its own refusal message named both `uri` and `source`, but only `uri` was
+    /// checked, so the call succeeded and put an empty node in the graph — a file
+    /// that exists, in the memory, with no content, indistinguishable downstream
+    /// from a genuinely empty file. An explicit `""` still means exactly that and
+    /// stays legal.
+    #[test]
+    fn ingest_requires_the_source_its_error_message_has_always_claimed() {
+        let mut s = AgentSession::new();
+        let call = |args: Value| {
+            req(
+                1,
+                "tools/call",
+                json!({ "name": "ingest", "arguments": args }),
+            )
+        };
+
+        let no_source = handle(&mut s, &call(json!({ "uri": "file:x.rs" }))).unwrap();
+        assert_eq!(no_source["error"]["code"], -32602, "{no_source}");
+        assert!(
+            no_source["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("source"),
+            "the refusal must name the missing field: {no_source}"
+        );
+
+        // An empty file is a real thing and must still ingest.
+        let empty = handle(
+            &mut s,
+            &call(json!({ "uri": "file:empty.rs", "source": "" })),
+        )
+        .unwrap();
+        assert!(
+            empty["result"]["content"][0]["text"].is_string(),
+            "an explicitly empty source is legal: {empty}"
+        );
     }
 
     #[test]

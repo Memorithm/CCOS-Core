@@ -2829,9 +2829,18 @@ fn run_op_stream(mem: &mut CcosMemory) -> (bool, bool) {
         let resp: serde_json::Value = match op.as_str() {
             "ingest" => {
                 let (uri, src) = (s("uri"), s("source"));
+                // The message has always claimed both are required; only `uri` was
+                // checked, so `{"op":"ingest","uri":"file:x.rs"}` succeeded and put
+                // an empty node in the graph — a file that exists, in the memory,
+                // with no content, which nothing downstream can tell from a real
+                // empty file. `source: ""` stays legal: an empty file is a real
+                // thing. What is refused is the key not being there at all.
                 if uri.is_empty() {
                     had_error = true;
                     err("ingest requires 'uri' and 'source'".into())
+                } else if req.get("source").is_none() {
+                    had_error = true;
+                    err("ingest requires 'source' (pass \"\" for an empty file)".into())
                 } else {
                     dirty = true;
                     serde_json::to_value(mem.ingest_source(&uri, &src)).unwrap()
@@ -2895,6 +2904,15 @@ fn run_op_stream(mem: &mut CcosMemory) -> (bool, bool) {
             }
             "impact" | "causes" => {
                 let depth = req["depth"].as_u64().unwrap_or(2) as u32;
+                // Without a node these answered `{"reached":[]}` — a well-formed
+                // "nothing depends on it" for a question nobody asked. `failure`,
+                // which takes the same argument, already refuses; these two were
+                // the odd ones out.
+                if s("node").trim().is_empty() {
+                    had_error = true;
+                    println!("{}", err(format!("{op} requires 'node'")));
+                    continue;
+                }
                 let reached = if op == "impact" {
                     mem.impact(&s("node"), depth)
                 } else {
