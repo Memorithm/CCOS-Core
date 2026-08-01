@@ -243,14 +243,30 @@ fn main() {
 
     // ── Cases ─────────────────────────────────────────────────────────────────
     let raw = std::fs::read_to_string(&cases_path).expect("cases file");
-    let commits: Vec<Vec<String>> = raw
+    let mut commits: Vec<Vec<String>> = raw
         .lines()
         .filter(|l| !l.trim().is_empty())
         .map(|l| l.split('\t').map(str::to_string).collect())
         .collect();
+    // `git log` is reverse-chronological, so taking the first N cases samples the
+    // most recent commits — which here are the ones that vendored CCOS's own
+    // source in bulk: densely interlinked in its graph, and co-changing because
+    // they were copied together rather than because a task related them. Sampling
+    // that way measured CCOS on the friendliest cases the repository contains.
+    // Order by content hash instead: deterministic, reproducible, and unrelated to
+    // anything either system optimises for.
+    commits.sort_by_key(|files| ccos_core::util::sha256_hex(&files.join("\t")));
     eprintln!("commits: {}", commits.len());
 
+    // A full sweep over this corpus does not finish in a sitting, and that is
+    // itself a measurement: set CASES_LIMIT to sample. Per-query latency is
+    // reported either way, because it is the number that explains the rest.
+    let limit: usize = std::env::var("CASES_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(usize::MAX);
     for budget in BUDGETS {
+        let (mut c_ms, mut b_ms) = (0u128, 0u128);
         let (mut c_all, mut b_all) = (Vec::new(), Vec::new());
         let (mut c_own, mut b_own) = (Vec::new(), Vec::new());
 
@@ -263,6 +279,9 @@ fn main() {
                 continue;
             }
             for anchor in &known {
+                if c_all.len() >= limit {
+                    break;
+                }
                 let targets: BTreeSet<String> = known
                     .iter()
                     .filter(|f| **f != *anchor)
@@ -270,8 +289,12 @@ fn main() {
                     .collect();
                 let ai = index_of[anchor.as_str()];
 
+                let t = std::time::Instant::now();
                 let c = score(&ccos_files(&mut mem, anchor, budget), &targets);
+                c_ms += t.elapsed().as_millis();
+                let t = std::time::Instant::now();
                 let b = score(&bm25_files(&index, &paths, &sources, ai, budget), &targets);
+                b_ms += t.elapsed().as_millis();
                 c_all.push(c);
                 b_all.push(b);
 
@@ -290,6 +313,12 @@ fn main() {
         }
 
         println!("\n─── budget {budget} tokens ───");
+        let n = c_all.len().max(1) as u128;
+        println!(
+            "  latence moyenne par requete: CCOS {} ms | BM25 {} ms",
+            c_ms / n,
+            b_ms / n
+        );
         report("PRINCIPAL (protocole figé)", &c_all, &b_all);
         report("post-hoc: hors external/ vendorise", &c_own, &b_own);
     }
