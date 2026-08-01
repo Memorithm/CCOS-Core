@@ -410,6 +410,10 @@ const LSA_LAMBDA_AUTHORITY: f64 = 1.0;
 /// causally-weighted LSA model (see [`CcosMemory::weighted_lsa_cache`]).
 type WeightedLsaModel = (u64, crate::embeddings::TfidfEmbedder, Vec<Vec<f32>>);
 
+/// `(graph version, undirected adjacency list)` — the cached neighbour index
+/// [`CcosMemory::hop_distances`] walks (see [`CcosMemory::adjacency_cache`]).
+type AdjacencyIndex = (u64, HashMap<NodeId, Vec<NodeId>>);
+
 /// Cheap identity of a snapshot file: enough to tell "nobody touched this since I
 /// last looked" from "somebody did".
 ///
@@ -523,7 +527,7 @@ pub struct CcosMemory {
     /// [`hop_distances`](Self::hop_distances) walks. Same versioned-cache shape as
     /// the region and embedding caches above: rebuilt only when the graph changed,
     /// so a run of recalls over a stable graph pays for it once.
-    adjacency_cache: RefCell<Option<(u64, HashMap<NodeId, Vec<NodeId>>)>>,
+    adjacency_cache: RefCell<Option<AdjacencyIndex>>,
 }
 
 impl Default for CcosMemory {
