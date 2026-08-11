@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # check-no-research-components.sh — CI guardrail: CCOS Core must never depend
-# on, expose, or re-enable RSI / Forge / Research-Lab components (mission §27).
+# on, expose, or re-enable product/research implementation components.
+#
+# V0.5 sovereignty invariant: neither OctaSoma nor SciRust may appear in the
+# ccos-core Cargo graph in any feature combination. Consumer-side adapters own
+# those integrations.
 #
 # Fails the build if any forbidden signal is found. False positives must be
 # justified in security/forbidden-core-dependencies.toml (minimal, versioned).
@@ -10,7 +14,7 @@ cd "$(dirname "$0")/.."
 fail=0
 note() { echo "::error::$1"; fail=1; }
 
-FORBIDDEN_PKGS='^(ccos-rsi|rsi|forge-core|forge-bridge|forge-cli|ccos-forge|ccos-research-lab|ccos-sandbox|ccos-scirust|scirust|ccos-octacore|octacore|rsi_mcp|forge_mcp)$'
+FORBIDDEN_PKGS='^(ccos-rsi|rsi|forge-core|forge-bridge|forge-cli|ccos-forge|ccos-research-lab|ccos-sandbox|ccos-scirust|scirust|octasoma|ccos-octasoma|ccos-octacore|octacore|rsi_mcp|forge_mcp)$'
 
 echo "== 1/4 cargo metadata: forbidden packages in the dependency graph =="
 if command -v cargo >/dev/null; then

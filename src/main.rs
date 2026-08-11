@@ -184,7 +184,6 @@ fn run_doctor(opts: &DoctorOpts) -> CliResult {
     let f_learned = cfg!(feature = "learned-embed");
     let f_mimalloc = cfg!(feature = "mimalloc");
     let f_slhav2 = cfg!(feature = "slhav2");
-    let f_octasoma = cfg!(feature = "octasoma");
     let pq_key_set = ccos_core::license::embedded_slh_dsa_key_is_set();
     let any_verifier = f_license || f_license_pq;
     let any_key_set = key_set || pq_key_set;
@@ -236,7 +235,6 @@ fn run_doctor(opts: &DoctorOpts) -> CliResult {
                 "llm": f_llm, "license": f_license, "license-pq": f_license_pq,
                 "syn-parser": f_syn, "learned-embed": f_learned, "mimalloc": f_mimalloc,
                 "slhav2": f_slhav2,
-                "octasoma": f_octasoma,
             },
             "parser": if f_syn { "syn-ast" } else { "line-heuristic" },
             "license": {
