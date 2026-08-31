@@ -1,0 +1,172 @@
+schema_version: 1
+kind: ccos_core_ecosystem_agent_roadmap
+status: active
+last_updated: "2026-08-31"
+repository: Memorithm/CCOS-Core
+intended_consumer: autonomous_coding_agent
+merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
+
+mission:
+  primary: >-
+    Preserve CCOS Core as the stable, deterministic, replayable and auditable
+    cognitive-memory kernel: event-sourced causal context, temporal validity,
+    contradictions, invalidation, decision-outcome chains, bounded context paging,
+    replay and provenance, independent of provider and self-modification engines.
+  ecosystem_goal: >-
+    Provide a cognitive-MMU/context service to coding and agent runtimes such as
+    SoulSystem and Memorithm Orchestrator while keeping enterprise governance in
+    CCOS Enterprise and experimental RSI/Forge/fused research in CCOS Research Lab.
+
+verified_current_facts:
+  - repository_describes_a_three_product_line_Core_Enterprise_and_Research_Lab
+  - Core_is_intended_to_be_free_of_RSI_Forge_and_self_modification
+  - Enterprise_is_intended_to_add_governance_multi_tenancy_security_and_licensing_without_changing_Core_semantics
+  - Research_Lab_is_intended_to_host_experimental_RSI_Forge_generated_code_and_fused_mechanisms_outside_the_certifiable_boundary
+  - Core_provides_deterministic_replayable_hash_chained_context_memory_and_post_mortem_debugging
+  - current_README_contains_legacy_or_fused_CCOS_EXTENDED_sections_that_must_be_reconciled_with_the_stated_three_product_boundary_before_agents_rely_on_them
+
+invariants:
+  - Core_default_semantics_remain_deterministic_replayable_and_provider_independent
+  - Core_must_not_depend_on_RSI_Forge_generated_code_execution_or_self_modification
+  - lossy_context_compaction_is_observable_and_never_presented_as_lossless
+  - cold_store_hash_failure_is_a_miss_or_error_not_silent_corrupt_restore
+  - replay_identity_and_absolute_step_semantics_survive_compaction_and_restart_with_documented_floor
+  - context_retrieval_quality_claims_require_reproducible_measured_protocols
+  - Enterprise_and_Research_features_do_not_silently_leak_into_Core_default_build
+  - required_CI_must_be_green_on_exact_PR_head_before_merge
+
+ownership:
+  role: stable_causal_context_memory_and_replay_kernel
+  owns:
+    - causal_context_graph_and_paging_semantics
+    - deterministic_event_log_snapshot_replay_and_time_travel
+    - context_budgeting_and_Core_recall_algorithms
+    - Core_MCP_memory_and_post_mortem_contracts
+    - Core_storage_integrity_and_context_provenance
+  does_not_own:
+    - CCOS_Enterprise_auth_RBAC_multi_tenancy_governance_or_vendor_licensing
+    - CCOS_Research_Lab_RSI_Forge_generated_code_or_experimental_fusion
+    - SoulSystem_agent_or_coding_harness_runtime
+    - Memorithm_Orchestrator_GitHub_development_control_plane
+    - SciRust_Hub_ecosystem_runtime_control_plane
+    - SciRust_Verify_general_evidence_dossier_semantics
+
+product_line_interfaces:
+  Memorithm/CCOS-Enterprise:
+    relationship: governed_product_embedding_or_deliberate_subtree_sync_of_Core
+    status: active
+    rules:
+      - Enterprise_may_wrap_Core_but_must_not_backflow_enterprise_dependencies_into_Core
+      - cross_product_improvements_require_explicit_lineage_and_conflict_review
+  Memorithm/CCOS-Research-Lab:
+    relationship: experimental_fork_or_subtree_consumer
+    status: active_research_boundary
+    rules:
+      - research_results_do_not_change_Core_claims_until_independently_promoted
+      - RSI_Forge_SLHA_OctaSoma_experiments_remain_outside_Core_certifiable_boundary
+
+ecosystem_interfaces:
+  Memorithm/SoulSystem:
+    relationship: coding_agent_host_and_primary_context_consumer_candidate
+    status: planned_versioned_bridge
+    contract:
+      - SoulSystem_owns_agent_session_tools_and_worktrees
+      - CCOS_owns_causal_context_recall_replay_and_postmortem
+      - session_and_repository_identity_must_bind_context_logs_to_the_correct_worktree
+  Memorithm/orchestrator:
+    relationship: autonomous_GitHub_development_control_plane_context_consumer
+    status: planned
+    contract:
+      - Orchestrator_owns_PR_issue_CI_and_publication_state
+      - CCOS_may_supply_bounded_context_and_replayable_agent_memory_only
+  Memorithm/ElasticXxx:
+    relationship: optional_resource_budget_controller
+    status: planned_not_assumed
+    rule: Elastic_may_adjust_memory_or_context_resource_budgets_only_through_explicit_CCOS_invariants_and_observable_transitions
+  Memorithm/SciRust-Verify:
+    relationship: evidence_integrity_partner
+    status: planned
+    rule: Verify_may_seal_context_replay_and_retrieval_evidence_without_reimplementing_CCOS_semantics
+  Memorithm/scirust-hub:
+    relationship: optional_component_orchestration
+    status: planned_not_assumed
+
+roadmap:
+  - id: CORE0
+    name: Product identity and boundary reconciliation
+    status: active_priority
+    goals:
+      - audit_README_Cargo_features_and_dependency_graph_against_the_three_product_charter
+      - classify_CCOS_EXTENDED_fusion_text_as_legacy_research_or_live_feature_with_evidence
+      - ensure_default_Core_dependency_graph_contains_no_Research_Lab_or_Enterprise_semantics
+      - publish_one_authoritative_Core_boundary_document
+  - id: CORE1
+    name: Replay and storage qualification
+    status: active
+    goals:
+      - crash_restart_and_compaction_replay_matrix
+      - hash_corruption_and_partial_write_failure_tests
+      - bounded_metadata_and_disk_spill_accounting
+      - explicit_lossless_vs_compacted_state_reporting
+  - id: CORE2
+    name: Coding-agent session contract
+    status: active
+    goals:
+      - stable_repository_worktree_session_and_tool_event_identity
+      - ingest_file_reads_edits_test_failures_and_execution_outcomes_without_host_specific_ambiguity
+      - context_export_with_exact_budget_and_provenance
+      - postmortem_linkage_to_agent_task_result
+  - id: CORE3
+    name: Retrieval evidence and tuning discipline
+    status: active
+    goals:
+      - keep_replay_trained_retrieval_deterministic
+      - separate_coverage_retrieval_and_bug_resolution_metrics
+      - preserve_honest_negative_results_against_RAG_or_GraphRAG
+      - no_policy_promotion_without_holdout_or_replay_safe_evidence
+  - id: CORE4
+    name: SoulSystem and Orchestrator adapters
+    status: planned_after_CORE2
+    goals:
+      - thin_MCP_or_library_adapter_for_SoulSystem_coding_sessions
+      - bounded_context_adapter_for_Orchestrator_workers
+      - no_shared_mutable_state_across_repository_worktrees
+  - id: CORE5
+    name: Enterprise synchronization contract
+    status: active
+    goals:
+      - exact_Core_commit_or_subtree_lineage_in_Enterprise
+      - compatibility_tests_before_and_after_subtree_sync
+      - no_Enterprise_dependency_backflow
+  - id: CORE6
+    name: Research promotion contract
+    status: planned
+    goals:
+      - define_evidence_required_to_promote_a_Research_Lab_memory_mechanism_to_Core
+      - require_default_determinism_replay_and_security_invariants
+      - retain_rejected_experimental_mechanisms_as_research_evidence
+  - id: CORE7
+    name: Stable cognitive memory productization
+    status: long_term
+    goals:
+      - semver_MSRV_storage_and_replay_compatibility_policy
+      - migration_tools_and_backup_restore
+      - measured_context_value_regression_suite
+      - ecosystem_adapter_compatibility_matrix
+
+agent_operating_protocol:
+  must_read_this_file:
+    - at_start_of_every_agent_session
+    - before_Core_feature_dependency_storage_or_replay_changes
+    - before_Enterprise_or_Research_Lab_sync
+    - before_SoulSystem_or_Orchestrator_integration
+    - before_PR_or_merge_decisions
+  must_update_this_file:
+    - when_product_boundary_or_feature_identity_changes
+    - when_cross_product_sync_occurs
+    - when_retrieval_or_storage_policy_is_promoted_or_rejected
+    - when_an_ecosystem_contract_changes
+  fail_closed: >-
+    If this roadmap cannot be read, do not make major Core-boundary, replay,
+    storage-format, cross-product sync, cross-repository integration, or merge
+    decisions. Read-only diagnosis is allowed.
