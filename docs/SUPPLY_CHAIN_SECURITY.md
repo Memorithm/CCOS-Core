@@ -17,8 +17,10 @@
 
 ## Third-party notices
 
-See THIRD_PARTY_NOTICES.md. Licenses are enforced by `deny.toml`
-(license allowlist; `LicenseRef-TarekZekriti-Dual` for first-party code).
+See THIRD_PARTY_NOTICES.md. Active first-party package metadata uses
+`PolyForm-Noncommercial-1.0.0`. `deny.toml` also records any dependency-scoped
+license exceptions still required by the resolved lockfile; those exceptions
+do not change the first-party license.
 
 ## Dependency admission rule
 
