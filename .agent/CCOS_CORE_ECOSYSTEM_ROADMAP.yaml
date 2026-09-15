@@ -1,7 +1,7 @@
 schema_version: 1
 kind: ccos_core_ecosystem_agent_roadmap
 status: active
-last_updated: "2026-08-31"
+last_updated: "2026-09-15"
 repository: Memorithm/CCOS-Core
 intended_consumer: autonomous_coding_agent
 merge_policy: never_merge_this_file_to_default_branch_unless_user_explicitly_requests
@@ -153,6 +153,32 @@ roadmap:
       - migration_tools_and_backup_restore
       - measured_context_value_regression_suite
       - ecosystem_adapter_compatibility_matrix
+
+reviewed_cross_product_slices:
+  - id: BEIR_IMPORT_2026_09_15
+    source_repository: Memorithm/CCOS-Core
+    source_pr: 26
+    reviewed_commit: d5b564eac008321d53db711276d0781ee8cc8a79
+    source_merge_commit: cb3d6987e2b1ea19ac2c0508a5a8635ec242f3f0
+    source_successful_runs: [34935825978, 34935825994, 34935826014]
+    consumer_repository: Memorithm/CCOS-Enterprise
+    consumer_pr: 150
+    consumer_tracking_issue: 149
+    consumer_provenance_file: core/UPSTREAM_CCOS_BEIR.json
+    scope:
+      - examples/beir_eval.rs
+      - examples/support/beir_import.rs
+      - docs/BEIR_IMPORT_CONTRACT.md
+    whole_Core_sync: false
+    acceptance:
+      - identical_allowlisted_source_hashes
+      - actual_import_and_llm_enabled_tests_in_both_workspaces
+      - all_applicable_CI_green_on_exact_consumer_head_before_merge
+    limitations:
+      - measurement_integrity_not_new_retrieval_or_LLM_quality_results
+      - no_change_to_ranking_or_metric_definitions
+      - no_Enterprise_dependency_backflow
+      - does_not_complete_Enterprise_served_memory_lifecycle
 
 agent_operating_protocol:
   must_read_this_file:
