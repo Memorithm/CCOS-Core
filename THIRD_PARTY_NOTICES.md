@@ -4,10 +4,13 @@ Dependency license policy is enforced by `deny.toml` and `cargo deny check licen
 
 ## Legal review record (engineering, not legal advice)
 
-The repository uses a custom `LicenseRef-TarekZekriti-Dual` identifier and
-includes PolyForm Noncommercial 1.0.0 text. It must not be described as
-OSI-approved open source. Commercial redistribution or use requires separate
-terms from the rightsholder.
+First-party CCOS Core package metadata and the repository license pointer use
+`PolyForm-Noncommercial-1.0.0` and include the PolyForm Noncommercial 1.0.0
+text. The software must not be described as OSI-approved open source.
+Commercial redistribution or use requires separate terms from the rightsholder.
+Historical or dependency-scoped `LicenseRef-*` entries may remain in
+`deny.toml` only where the resolved dependency graph still requires them; they
+do not redefine the active first-party package license.
 
 EU software-copyright context is Directive 2009/24/EC: computer programs are
 copyright-protected and reproduction, adaptation, and distribution are
@@ -21,8 +24,9 @@ separately protected additional information ([EUR-Lex](https://eur-lex.europa.eu
 automatically anonymisation. Operators remain responsible for lawful basis,
 retention, access controls, and data-subject rights where GDPR applies.
 
-A legal professional should review the dual-license wording, contributor
-rights, patent clauses, and customer terms before commercial distribution.
+A legal professional should review the noncommercial/commercial licensing
+boundary, contributor rights, patent clauses, and customer terms before
+commercial distribution.
 
 The optional Forge backend is vendored at the exact reviewed commit
 `5afe067b6d1223b096c39abcefb935856034ccb9`; its upstream `LICENSING.md` is
