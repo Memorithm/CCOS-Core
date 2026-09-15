@@ -20,6 +20,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - name: Author range regressions
+        run: bash scripts/test-author-push-range.sh
       - name: Author policy (single human contributor)
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
@@ -29,6 +31,15 @@ jobs:
             # every PR failed this job no matter who wrote the real commits.
             scripts/check-author-policy.sh \
               "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            # Qualify commits introduced by this push, not historical ancestry.
+            before="${{ github.event.before }}"
+            after="${{ github.sha }}"
+            if [ -n "$before" ] && [ "$before" != "0000000000000000000000000000000000000000" ]; then
+              scripts/check-author-policy.sh "$before..$after"
+            else
+              scripts/check-author-policy.sh "$after"
+            fi
           else
             scripts/check-author-policy.sh HEAD
           fi
