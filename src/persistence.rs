@@ -198,9 +198,7 @@ fn read_persistence_bytes(path: &Path, payload_limit: usize) -> Result<Vec<u8>, 
         .checked_add(1)
         .and_then(|limit| limit.checked_sub(data.len()))
         .ok_or_else(|| PersistenceError::Serde("persistence limit overflow".into()))?;
-    (&mut file)
-        .take(read_limit as u64)
-        .read_to_end(&mut data)?;
+    (&mut file).take(read_limit as u64).read_to_end(&mut data)?;
     if data.len() > file_limit {
         return Err(PersistenceError::Serde(
             "persistence payload exceeds limit".into(),

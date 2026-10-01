@@ -60,9 +60,9 @@ pub(crate) fn read_regular_bounded(path: &Path, limit: usize) -> io::Result<Vec<
         ));
     }
 
-    let read_limit = limit.checked_add(1).ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "persistence limit overflow")
-    })?;
+    let read_limit = limit
+        .checked_add(1)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "persistence limit overflow"))?;
     let mut data = Vec::with_capacity((metadata_len as usize).min(limit));
     file.take(read_limit as u64).read_to_end(&mut data)?;
     if data.len() > limit {
@@ -94,10 +94,7 @@ mod tests {
     #[test]
     fn accepts_limit_and_rejects_limit_plus_one() {
         let path = temp_path("limit");
-        File::create(&path)
-            .unwrap()
-            .write_all(b"12345678")
-            .unwrap();
+        File::create(&path).unwrap().write_all(b"12345678").unwrap();
         assert_eq!(read_regular_bounded(&path, 8).unwrap(), b"12345678");
         File::create(&path)
             .unwrap()
@@ -113,10 +110,7 @@ mod tests {
     fn rejects_symlink_inputs() {
         let target = temp_path("target");
         let link = temp_path("link");
-        File::create(&target)
-            .unwrap()
-            .write_all(b"{}")
-            .unwrap();
+        File::create(&target).unwrap().write_all(b"{}").unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(&target, &link).unwrap();
         #[cfg(windows)]
