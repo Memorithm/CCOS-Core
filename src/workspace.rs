@@ -345,9 +345,8 @@ impl WorkspaceScanner {
         relative: &Path,
         display_path: &Path,
     ) -> Result<Option<std::fs::File>, WorkspaceError> {
-        let flags = rustix::fs::OFlags::RDONLY
-            | rustix::fs::OFlags::NOFOLLOW
-            | rustix::fs::OFlags::CLOEXEC;
+        let flags =
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC;
 
         #[cfg(any(target_os = "linux", target_os = "android"))]
         let opened = rustix::fs::openat2(
@@ -388,12 +387,8 @@ impl WorkspaceScanner {
                 } else {
                     flags | rustix::fs::OFlags::DIRECTORY
                 };
-                directory = rustix::fs::openat(
-                    current,
-                    name,
-                    component_flags,
-                    rustix::fs::Mode::empty(),
-                );
+                directory =
+                    rustix::fs::openat(current, name, component_flags, rustix::fs::Mode::empty());
             }
             directory
         };
@@ -657,7 +652,11 @@ mod tests {
 
         let dir = temp_dir("ancestor_root");
         let outside = temp_dir("ancestor_outside");
-        std::fs::write(outside.join("sentinel.rs"), "pub const OUTSIDE: bool = true;").unwrap();
+        std::fs::write(
+            outside.join("sentinel.rs"),
+            "pub const OUTSIDE: bool = true;",
+        )
+        .unwrap();
         symlink(&outside, dir.join("swapped")).unwrap();
 
         let root = WorkspaceScanner::open_root(dir.to_string_lossy().as_ref())
