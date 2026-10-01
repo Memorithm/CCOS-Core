@@ -82,7 +82,7 @@ ccos-memory-runtime = { path = "crates/ccos-memory-runtime", optional = true }
 # line-based heuristic (kept as the fallback for non-Rust / unparseable input).
 default = ["syn-parser"]
 # The LLM / eval / workspace modules and the `ccos` binary (which drives them).
-llm = ["dep:tokio", "dep:reqwest"]
+llm = ["dep:tokio", "dep:reqwest", "dep:rustix"]
 syn-parser = ["dep:syn", "dep:proc-macro2"]
 mimalloc = ["dep:mimalloc"]
 # Opt-in **learned** semantic embedder: distil the deterministic INT4 TF-IDF into
@@ -109,6 +109,7 @@ license-pq = ["dep:lattice-slh-dsa"]
 # unchanged, and a *signed* bundle is refused with a rebuild hint rather than
 # silently accepted unverified.
 signed-sync = ["dep:ed25519-dalek", "dep:getrandom"]
+
 # Opt-in **SLHAv2 memory backend**: pulls the `ccos-memory-runtime` middleware
 # crate — a **zero-dependency** SLHAv2 tile backend (HOT→WARM tile compression:
 # 128→96 B, latent preserved) that vendors the minimal decode logic, so it pulls
@@ -122,6 +123,11 @@ slhav2 = ["dep:ccos-memory-runtime"]
 # quarantine. Pulls **no new crate**: only the blocking client of the `reqwest`
 # already in the tree for `llm`. Local server ⇒ nothing leaves the host.
 neural-embed = ["dep:reqwest", "reqwest/blocking"]
+
+[target.'cfg(unix)'.dependencies]
+# Capability-style, descriptor-relative opens for the workspace scanner. The
+# dependency is active only with `llm`, which owns the scanner.
+rustix = { version = "1.1.4", features = ["fs"], optional = true }
 
 [dev-dependencies]
 proptest = "1"
@@ -186,5 +192,3 @@ license = "PolyForm-Noncommercial-1.0.0"
 name = "model_integration"
 path = "tests/model_integration/main.rs"
 required-features = ["llm"]
-
-
