@@ -21,12 +21,12 @@
 # Ollama, …) — the project ships provider adapters (mission §30). Attribution
 # is forbidden, interoperability is not.
 #
-# MERGE COMMITS ARE SKIPPED. A pull request merged through GitHub's UI produces
-# a merge commit authored by the account that clicked the button and committed
-# by "GitHub" — an identity no contributor can influence and that can never
-# equal the canonical identity. Checking them made the policy unsatisfiable:
-# the commits being merged are still each checked, so skipping merge commits
-# costs no authored-content coverage.
+# MERGE COMMITS ARE SKIPPED. GitHub-authored squash commits are not merge
+# commits, however, and use the exact committer identity
+# `GitHub <noreply@github.com>`. That service identity is accepted only as a
+# committer; it is never accepted as an author. The authored identity therefore
+# remains subject to the single-human policy while GitHub's immutable merge
+# provenance can be represented truthfully.
 #
 # Usage:
 #   scripts/check-author-policy.sh           # check HEAD commit
@@ -62,10 +62,18 @@ is_authorized_identity() {
   is_authorized_human "$1" "$2" || is_allowed_automation_bot "$1" "$2"
 }
 
+is_github_merge_committer() {
+  [ "$1" = "GitHub" ] && [ "$2" = "noreply@github.com" ]
+}
+
 fail=0
 while IFS=$'\t' read -r h an ae cn ce; do
-  if ! is_authorized_identity "$an" "$ae" || ! is_authorized_identity "$cn" "$ce"; then
-    echo "::error::$h author/committer identity is outside the single-human-plus-automation policy"
+  if ! is_authorized_identity "$an" "$ae"; then
+    echo "::error::$h author identity is outside the single-human-plus-automation policy"
+    fail=1
+  fi
+  if ! is_authorized_identity "$cn" "$ce" && ! is_github_merge_committer "$cn" "$ce"; then
+    echo "::error::$h committer identity is outside the single-human-plus-automation policy"
     fail=1
   fi
   if echo "$an$ae$cn$ce" | grep -Eiq "$IDENTITY_RE"; then
