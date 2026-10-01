@@ -166,11 +166,23 @@ impl WorkspaceScanner {
         let Some(root) = Self::open_root(&self.root).await? else {
             return Ok(current);
         };
-        let paths = Self::collect_rs(&root.canonical).await?;
+        #[cfg(unix)]
+        let paths = {
+            let directory = root.dir.try_clone().map_err(|e| {
+                WorkspaceError::Io(format!("cannot clone workspace root descriptor: {e}"))
+            })?;
+            tokio::task::spawn_blocking(move || Self::collect_rs_unix(directory))
+                .await
+                .map_err(|e| WorkspaceError::Io(format!("workspace scan worker failed: {e}")))??
+        };
+        #[cfg(not(unix))]
+        let paths: Vec<PathBuf> = Vec::new();
         let mut total_bytes = 0u64;
-        for path in paths {
+        for relative in paths {
+            let path = root.canonical.join(&relative);
             let key = path.to_string_lossy().to_string();
-            let Some(content) = Self::read_regular_file(&root, &path, &mut total_bytes).await?
+            let Some(content) =
+                Self::read_regular_file(&root, &relative, &path, &mut total_bytes).await?
             else {
                 continue; // disappeared mid-scan: treat as absent
             };
@@ -192,29 +204,51 @@ impl WorkspaceScanner {
                 root_path.display()
             )));
         }
+        let canonical = tokio::fs::canonicalize(&root_path).await?;
+        let canonical_metadata = tokio::fs::symlink_metadata(&canonical).await?;
 
         #[cfg(unix)]
-        let dir = rustix::fs::open(
-            &root_path,
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::DIRECTORY
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )
-        .map_err(|e| {
-            WorkspaceError::UnsafePath(format!(
-                "cannot pin workspace root {}: {e}",
-                root_path.display()
-            ))
-        })?;
+        {
+            use std::os::unix::fs::MetadataExt;
 
-        let canonical = tokio::fs::canonicalize(&root_path).await?;
-        Ok(Some(WorkspaceRoot {
-            canonical,
-            #[cfg(unix)]
-            dir,
-        }))
+            let dir = rustix::fs::open(
+                &root_path,
+                rustix::fs::OFlags::RDONLY
+                    | rustix::fs::OFlags::DIRECTORY
+                    | rustix::fs::OFlags::NOFOLLOW
+                    | rustix::fs::OFlags::CLOEXEC,
+                rustix::fs::Mode::empty(),
+            )
+            .map_err(|e| {
+                WorkspaceError::UnsafePath(format!(
+                    "cannot pin workspace root {}: {e}",
+                    canonical.display()
+                ))
+            })?;
+            let root_file = std::fs::File::from(dir);
+            let descriptor_metadata = root_file.metadata()?;
+            if descriptor_metadata.dev() != metadata.dev()
+                || descriptor_metadata.ino() != metadata.ino()
+                || descriptor_metadata.dev() != canonical_metadata.dev()
+                || descriptor_metadata.ino() != canonical_metadata.ino()
+            {
+                return Err(WorkspaceError::UnsafePath(format!(
+                    "workspace root changed while it was being pinned: {}",
+                    canonical.display()
+                )));
+            }
+            let dir = rustix::fd::OwnedFd::from(root_file);
+            Ok(Some(WorkspaceRoot { canonical, dir }))
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _root = WorkspaceRoot { canonical };
+            Err(WorkspaceError::UnsafePath(
+                "secure workspace scanning requires descriptor-relative path resolution, which is not available on this platform"
+                    .into(),
+            ))
+        }
     }
 
     /// Open one file without following its final symlink, revalidate that it is
@@ -223,82 +257,41 @@ impl WorkspaceScanner {
     /// the scan.
     async fn read_regular_file(
         root: &WorkspaceRoot,
-        path: &Path,
+        relative: &Path,
+        display_path: &Path,
         total_bytes: &mut u64,
     ) -> Result<Option<String>, WorkspaceError> {
-        let before = match tokio::fs::symlink_metadata(path).await {
-            Ok(metadata) => metadata,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
-        if before.file_type().is_symlink() || !before.file_type().is_file() {
-            return Err(WorkspaceError::UnsafePath(format!(
-                "refusing non-regular Rust source {}",
-                path.display()
-            )));
-        }
-
-        let relative = path.strip_prefix(&root.canonical).map_err(|_| {
-            WorkspaceError::UnsafePath(format!(
-                "Rust source escapes workspace root: {}",
-                path.display()
-            ))
-        })?;
         if relative
             .components()
             .any(|component| !matches!(component, Component::Normal(_)))
         {
             return Err(WorkspaceError::UnsafePath(format!(
                 "invalid relative Rust source path: {}",
-                path.display()
+                display_path.display()
             )));
         }
 
         #[cfg(unix)]
-        let file = match Self::open_relative_unix(&root.dir, relative, path)? {
+        let file = match Self::open_relative_unix(&root.dir, relative, display_path)? {
             Some(file) => tokio::fs::File::from_std(file),
             None => return Ok(None),
         };
 
         #[cfg(not(unix))]
-        let file = {
-            let canonical = match tokio::fs::canonicalize(path).await {
-                Ok(path) => path,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(e) => return Err(e.into()),
-            };
-            if !canonical.starts_with(&root.canonical) {
-                return Err(WorkspaceError::UnsafePath(format!(
-                    "Rust source escapes workspace root: {}",
-                    path.display()
-                )));
-            }
-            let mut options = tokio::fs::OpenOptions::new();
-            options.read(true);
-            #[cfg(windows)]
-            options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
-            match options.open(path).await {
-                Ok(file) => file,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-                Err(e) => {
-                    return Err(WorkspaceError::UnsafePath(format!(
-                        "cannot safely open {}: {e}",
-                        path.display()
-                    )))
-                }
-            }
-        };
+        let file: tokio::fs::File = return Err(WorkspaceError::UnsafePath(
+            "secure descriptor-relative workspace reads are unavailable on this platform".into(),
+        ));
         let metadata = file.metadata().await?;
         if !metadata.file_type().is_file() {
             return Err(WorkspaceError::UnsafePath(format!(
                 "refusing non-regular Rust source {}",
-                path.display()
+                display_path.display()
             )));
         }
         if metadata.len() > MAX_RUST_FILE_BYTES {
             return Err(WorkspaceError::LimitExceeded(format!(
                 "{} is {} bytes (maximum {})",
-                path.display(),
+                display_path.display(),
                 metadata.len(),
                 MAX_RUST_FILE_BYTES
             )));
@@ -320,7 +313,7 @@ impl WorkspaceScanner {
         if bytes.len() as u64 > MAX_RUST_FILE_BYTES {
             return Err(WorkspaceError::LimitExceeded(format!(
                 "{} grew beyond {} bytes while being read",
-                path.display(),
+                display_path.display(),
                 MAX_RUST_FILE_BYTES
             )));
         }
@@ -334,7 +327,10 @@ impl WorkspaceScanner {
             )));
         }
         let content = String::from_utf8(bytes).map_err(|e| {
-            WorkspaceError::Io(format!("{} is not valid UTF-8: {e}", path.display()))
+            WorkspaceError::Io(format!(
+                "{} is not valid UTF-8: {e}",
+                display_path.display()
+            ))
         })?;
         Ok(Some(content))
     }
@@ -346,7 +342,10 @@ impl WorkspaceScanner {
         display_path: &Path,
     ) -> Result<Option<std::fs::File>, WorkspaceError> {
         let flags =
-            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC;
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::CLOEXEC
+                | rustix::fs::OFlags::NONBLOCK;
 
         #[cfg(any(target_os = "linux", target_os = "android"))]
         let opened = rustix::fs::openat2(
@@ -400,6 +399,79 @@ impl WorkspaceScanner {
     }
 
     #[cfg(unix)]
+    fn collect_rs_unix(
+        root: rustix::fd::OwnedFd,
+    ) -> Result<Vec<PathBuf>, WorkspaceError> {
+        use std::os::unix::ffi::OsStrExt;
+
+        let mut out = Vec::new();
+        let mut stack = vec![(root, PathBuf::new())];
+        while let Some((directory, relative_dir)) = stack.pop() {
+            let entries = rustix::fs::Dir::read_from(&directory).map_err(|e| {
+                WorkspaceError::Io(format!(
+                    "cannot enumerate workspace directory {}: {e}",
+                    relative_dir.display()
+                ))
+            })?;
+            for entry in entries {
+                let entry = entry.map_err(|e| {
+                    WorkspaceError::Io(format!(
+                        "cannot enumerate workspace directory {}: {e}",
+                        relative_dir.display()
+                    ))
+                })?;
+                let name_bytes = entry.file_name().to_bytes();
+                if name_bytes == b"." || name_bytes == b".." {
+                    continue;
+                }
+                let name = std::ffi::OsStr::from_bytes(name_bytes);
+                if name_bytes.first() == Some(&b'.') || name_bytes == b"target" {
+                    continue;
+                }
+                let relative = relative_dir.join(name);
+                let file_type = entry.file_type();
+                if file_type.is_symlink() {
+                    if relative.extension().and_then(|e| e.to_str()) == Some("rs") {
+                        return Err(WorkspaceError::UnsafePath(format!(
+                            "refusing symbolic-link Rust source {}",
+                            relative.display()
+                        )));
+                    }
+                    continue;
+                }
+                if file_type.is_dir() {
+                    let child = rustix::fs::openat(
+                        &directory,
+                        name,
+                        rustix::fs::OFlags::RDONLY
+                            | rustix::fs::OFlags::DIRECTORY
+                            | rustix::fs::OFlags::NOFOLLOW
+                            | rustix::fs::OFlags::CLOEXEC
+                            | rustix::fs::OFlags::NONBLOCK,
+                        rustix::fs::Mode::empty(),
+                    )
+                    .map_err(|e| {
+                        WorkspaceError::UnsafePath(format!(
+                            "cannot safely enter workspace directory {}: {e}",
+                            relative.display()
+                        ))
+                    })?;
+                    stack.push((child, relative));
+                } else if relative.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    if out.len() == MAX_WORKSPACE_RUST_FILES {
+                        return Err(WorkspaceError::LimitExceeded(format!(
+                            "more than {MAX_WORKSPACE_RUST_FILES} Rust sources"
+                        )));
+                    }
+                    out.push(relative);
+                }
+            }
+        }
+        out.sort();
+        Ok(out)
+    }
+
+    #[cfg(unix)]
     fn map_anchored_open_error(
         error: rustix::io::Errno,
         path: &Path,
@@ -439,48 +511,6 @@ impl WorkspaceScanner {
 
     /// Iteratively (no async recursion) collect `.rs` files, skipping
     /// `target/`, VCS and hidden directories.
-    async fn collect_rs(root: &Path) -> Result<Vec<PathBuf>, WorkspaceError> {
-        let mut out = Vec::new();
-        let mut stack = vec![root.to_path_buf()];
-        while let Some(dir) = stack.pop() {
-            let mut rd = match tokio::fs::read_dir(&dir).await {
-                Ok(rd) => rd,
-                Err(_) => continue, // directory vanished: skip
-            };
-            while let Some(entry) = rd.next_entry().await? {
-                let path = entry.path();
-                let file_type = match entry.file_type().await {
-                    Ok(ft) => ft,
-                    Err(_) => continue,
-                };
-                if file_type.is_symlink() {
-                    if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-                        return Err(WorkspaceError::UnsafePath(format!(
-                            "refusing symbolic-link Rust source {}",
-                            path.display()
-                        )));
-                    }
-                    continue;
-                } else if file_type.is_dir() {
-                    let name = entry.file_name();
-                    let name = name.to_string_lossy();
-                    if name == "target" || name == ".git" || name.starts_with('.') {
-                        continue;
-                    }
-                    stack.push(path);
-                } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-                    if out.len() == MAX_WORKSPACE_RUST_FILES {
-                        return Err(WorkspaceError::LimitExceeded(format!(
-                            "more than {MAX_WORKSPACE_RUST_FILES} Rust sources"
-                        )));
-                    }
-                    out.push(path);
-                }
-            }
-        }
-        out.sort();
-        Ok(out)
-    }
 }
 
 #[cfg(test)]
@@ -663,11 +693,13 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let escaped = root.canonical.join("swapped/sentinel.rs");
+        let relative = Path::new("swapped/sentinel.rs");
+        let escaped = root.canonical.join(relative);
         let mut total = 0;
-        let error = WorkspaceScanner::read_regular_file(&root, &escaped, &mut total)
-            .await
-            .unwrap_err();
+        let error =
+            WorkspaceScanner::read_regular_file(&root, relative, &escaped, &mut total)
+                .await
+                .unwrap_err();
         assert!(matches!(error, WorkspaceError::UnsafePath(_)));
         assert_eq!(total, 0, "rejected source must not consume a read budget");
 
