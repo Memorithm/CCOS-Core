@@ -44,6 +44,7 @@ impl KernelSnapshot {
         let json = self
             .to_json()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        enforce_snapshot_size(json.len(), MAX_SNAPSHOT_BYTES)?;
         std::fs::write(path, json)
     }
 
@@ -94,11 +95,28 @@ impl KernelSnapshot {
     }
 }
 
+fn enforce_snapshot_size(size: usize, limit: usize) -> std::io::Result<()> {
+    if size > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("snapshot exceeds {limit} byte limit"),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::event_log::{EventPayload, EventType};
     use crate::memory::NodeType;
+
+    #[test]
+    fn writer_and_loader_share_the_snapshot_size_limit() {
+        assert!(enforce_snapshot_size(8, 8).is_ok());
+        let error = enforce_snapshot_size(9, 8).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
 
     #[test]
     fn snapshot_json_roundtrip_preserves_state() {
