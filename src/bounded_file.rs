@@ -183,7 +183,10 @@ mod tests {
     fn writer_rejects_symlink_without_modifying_target() {
         let target = temp_path("write_target");
         let link = temp_path("write_link");
-        File::create(&target).unwrap().write_all(b"original").unwrap();
+        File::create(&target)
+            .unwrap()
+            .write_all(b"original")
+            .unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(&target, &link).unwrap();
         #[cfg(windows)]
