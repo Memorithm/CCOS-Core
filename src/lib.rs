@@ -86,6 +86,7 @@ pub mod util;
 // CCOS autonomous context runtime.
 pub mod agents;
 pub mod benchmark;
+mod bounded_file;
 pub mod causal_flash;
 pub mod persistence;
 pub mod scheduler;

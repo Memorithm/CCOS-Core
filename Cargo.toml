@@ -82,7 +82,7 @@ ccos-memory-runtime = { path = "crates/ccos-memory-runtime", optional = true }
 # line-based heuristic (kept as the fallback for non-Rust / unparseable input).
 default = ["syn-parser"]
 # The LLM / eval / workspace modules and the `ccos` binary (which drives them).
-llm = ["dep:tokio", "dep:reqwest", "dep:rustix"]
+llm = ["dep:tokio", "dep:reqwest"]
 syn-parser = ["dep:syn", "dep:proc-macro2"]
 mimalloc = ["dep:mimalloc"]
 # Opt-in **learned** semantic embedder: distil the deterministic INT4 TF-IDF into
@@ -125,9 +125,9 @@ slhav2 = ["dep:ccos-memory-runtime"]
 neural-embed = ["dep:reqwest", "reqwest/blocking"]
 
 [target.'cfg(unix)'.dependencies]
-# Capability-style, descriptor-relative opens for the workspace scanner. The
-# dependency is active only with `llm`, which owns the scanner.
-rustix = { version = "1.1.4", features = ["fs"], optional = true }
+# No-follow file opens for bounded persistence reads, plus capability-style,
+# descriptor-relative opens for the optional workspace scanner.
+rustix = { version = "1.1.4", features = ["fs"] }
 
 [dev-dependencies]
 proptest = "1"

@@ -10,6 +10,8 @@ use crate::event_log::EventLog;
 use crate::memory::MemoryGraph;
 use serde::{Deserialize, Serialize};
 
+const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KernelSnapshot {
     /// Crate version that wrote the snapshot (for forward-compat checks).
@@ -47,8 +49,12 @@ impl KernelSnapshot {
 
     /// Load a snapshot previously written by [`KernelSnapshot::save`].
     pub fn load(path: &str) -> std::io::Result<Self> {
-        let data = std::fs::read_to_string(path)?;
-        Self::from_json(&data).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+        let data = crate::bounded_file::read_regular_bounded(
+            std::path::Path::new(path),
+            MAX_SNAPSHOT_BYTES,
+        )?;
+        serde_json::from_slice(&data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
     }
 
     /// Verify the snapshot's integrity without mutating it: both hash chains
