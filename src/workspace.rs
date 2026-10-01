@@ -503,7 +503,10 @@ mod tests {
         let mut scanner = WorkspaceScanner::new(dir.to_string_lossy().to_string());
         let error = scanner.scan_workspace().await.unwrap_err();
         assert!(matches!(error, WorkspaceError::UnsafePath(_)));
-        assert!(scanner.files.is_empty(), "outside source must not be indexed");
+        assert!(
+            scanner.files.is_empty(),
+            "outside source must not be indexed"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
         std::fs::remove_dir_all(&outside).ok();
@@ -518,7 +521,10 @@ mod tests {
         let mut scanner = WorkspaceScanner::new(dir.to_string_lossy().to_string());
         let error = scanner.scan_workspace().await.unwrap_err();
         assert!(matches!(error, WorkspaceError::LimitExceeded(_)));
-        assert!(scanner.files.is_empty(), "oversized source must not be indexed");
+        assert!(
+            scanner.files.is_empty(),
+            "oversized source must not be indexed"
+        );
 
         std::fs::remove_dir_all(&dir).ok();
     }
