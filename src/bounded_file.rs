@@ -60,7 +60,8 @@ pub(crate) fn write_regular_nofollow(path: &Path, data: &[u8]) -> io::Result<()>
         rustix::fs::OFlags::WRONLY
             | rustix::fs::OFlags::CREATE
             | rustix::fs::OFlags::NOFOLLOW
-            | rustix::fs::OFlags::CLOEXEC,
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NONBLOCK,
         rustix::fs::Mode::from_bits_truncate(0o600),
     )?;
     write_validated(File::from(fd), data)
