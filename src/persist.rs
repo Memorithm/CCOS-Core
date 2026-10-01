@@ -45,7 +45,7 @@ impl KernelSnapshot {
             .to_json()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         enforce_snapshot_size(json.len(), MAX_SNAPSHOT_BYTES)?;
-        std::fs::write(path, json)
+        crate::bounded_file::write_regular_nofollow(std::path::Path::new(path), json.as_bytes())
     }
 
     /// Load a snapshot previously written by [`KernelSnapshot::save`].
