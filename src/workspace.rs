@@ -341,11 +341,10 @@ impl WorkspaceScanner {
         relative: &Path,
         display_path: &Path,
     ) -> Result<Option<std::fs::File>, WorkspaceError> {
-        let flags =
-            rustix::fs::OFlags::RDONLY
-                | rustix::fs::OFlags::NOFOLLOW
-                | rustix::fs::OFlags::CLOEXEC
-                | rustix::fs::OFlags::NONBLOCK;
+        let flags = rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC
+            | rustix::fs::OFlags::NONBLOCK;
 
         #[cfg(any(target_os = "linux", target_os = "android"))]
         let opened = rustix::fs::openat2(
@@ -399,9 +398,7 @@ impl WorkspaceScanner {
     }
 
     #[cfg(unix)]
-    fn collect_rs_unix(
-        root: rustix::fd::OwnedFd,
-    ) -> Result<Vec<PathBuf>, WorkspaceError> {
+    fn collect_rs_unix(root: rustix::fd::OwnedFd) -> Result<Vec<PathBuf>, WorkspaceError> {
         use std::os::unix::ffi::OsStrExt;
 
         let mut out = Vec::new();
@@ -508,7 +505,6 @@ impl WorkspaceScanner {
         delta.removed.sort();
         delta
     }
-
 }
 
 #[cfg(test)]
@@ -694,10 +690,9 @@ mod tests {
         let relative = Path::new("swapped/sentinel.rs");
         let escaped = root.canonical.join(relative);
         let mut total = 0;
-        let error =
-            WorkspaceScanner::read_regular_file(&root, relative, &escaped, &mut total)
-                .await
-                .unwrap_err();
+        let error = WorkspaceScanner::read_regular_file(&root, relative, &escaped, &mut total)
+            .await
+            .unwrap_err();
         assert!(matches!(error, WorkspaceError::UnsafePath(_)));
         assert_eq!(total, 0, "rejected source must not consume a read budget");
 
