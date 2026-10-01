@@ -13,19 +13,30 @@ use crate::memory::MemoryGraph;
 use crate::util::sha256_hex as hash;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
+
+/// Hard limits for one workspace scan. They keep an untrusted tree from
+/// turning discovery into an unbounded allocation or read.
+pub const MAX_WORKSPACE_RUST_FILES: usize = 10_000;
+pub const MAX_RUST_FILE_BYTES: u64 = 8 * 1024 * 1024;
+pub const MAX_WORKSPACE_RUST_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Typed error for workspace operations.
 #[derive(Debug)]
 pub enum WorkspaceError {
     Io(String),
+    UnsafePath(String),
+    LimitExceeded(String),
 }
 
 impl std::fmt::Display for WorkspaceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             WorkspaceError::Io(e) => write!(f, "workspace I/O error: {e}"),
+            WorkspaceError::UnsafePath(e) => write!(f, "unsafe workspace path: {e}"),
+            WorkspaceError::LimitExceeded(e) => write!(f, "workspace limit exceeded: {e}"),
         }
     }
 }
@@ -139,16 +150,120 @@ impl WorkspaceScanner {
     /// Files that vanish mid-scan are skipped (and thus appear as removed).
     async fn read_current(&self) -> Result<HashMap<String, (String, String)>, WorkspaceError> {
         let mut current = HashMap::new();
-        for path in Self::collect_rs(&self.root).await? {
+        let (root, paths) = Self::collect_rs(&self.root).await?;
+        let mut total_bytes = 0u64;
+        for path in paths {
             let key = path.to_string_lossy().to_string();
-            match tokio::fs::read_to_string(&path).await {
-                Ok(content) => {
-                    current.insert(key, (hash(&content), content));
-                }
-                Err(_) => continue, // disappeared mid-scan: treat as absent
-            }
+            let Some(content) = Self::read_regular_file(&root, &path, &mut total_bytes).await?
+            else {
+                continue; // disappeared mid-scan: treat as absent
+            };
+            current.insert(key, (hash(&content), content));
         }
         Ok(current)
+    }
+
+    /// Open one file without following its final symlink, revalidate that it is
+    /// a regular file confined to `root`, and read at most the configured
+    /// per-file and aggregate budgets. `None` means the file vanished during
+    /// the scan.
+    async fn read_regular_file(
+        root: &Path,
+        path: &Path,
+        total_bytes: &mut u64,
+    ) -> Result<Option<String>, WorkspaceError> {
+        let before = match tokio::fs::symlink_metadata(path).await {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        if before.file_type().is_symlink() || !before.file_type().is_file() {
+            return Err(WorkspaceError::UnsafePath(format!(
+                "refusing non-regular Rust source {}",
+                path.display()
+            )));
+        }
+
+        let canonical = match tokio::fs::canonicalize(path).await {
+            Ok(path) => path,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        if !canonical.starts_with(root) {
+            return Err(WorkspaceError::UnsafePath(format!(
+                "Rust source escapes workspace root: {}",
+                path.display()
+            )));
+        }
+
+        let mut options = tokio::fs::OpenOptions::new();
+        options.read(true);
+        // Reject a final-component symlink even if it is swapped in after the
+        // metadata check. Directory symlinks are never traversed by collect_rs.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        options.custom_flags(0x0002_0000); // O_NOFOLLOW
+        #[cfg(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "openbsd",
+            target_os = "netbsd"
+        ))]
+        options.custom_flags(0x0000_0100); // O_NOFOLLOW
+        #[cfg(windows)]
+        options.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+
+        let file = match options.open(path).await {
+            Ok(file) => file,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => {
+                return Err(WorkspaceError::UnsafePath(format!(
+                    "cannot safely open {}: {e}",
+                    path.display()
+                )))
+            }
+        };
+        let metadata = file.metadata().await?;
+        if !metadata.file_type().is_file() {
+            return Err(WorkspaceError::UnsafePath(format!(
+                "refusing non-regular Rust source {}",
+                path.display()
+            )));
+        }
+        if metadata.len() > MAX_RUST_FILE_BYTES {
+            return Err(WorkspaceError::LimitExceeded(format!(
+                "{} is {} bytes (maximum {})",
+                path.display(),
+                metadata.len(),
+                MAX_RUST_FILE_BYTES
+            )));
+        }
+        *total_bytes = total_bytes
+            .checked_add(metadata.len())
+            .ok_or_else(|| WorkspaceError::LimitExceeded("byte budget overflow".into()))?;
+        if *total_bytes > MAX_WORKSPACE_RUST_BYTES {
+            return Err(WorkspaceError::LimitExceeded(format!(
+                "Rust sources exceed {} bytes",
+                MAX_WORKSPACE_RUST_BYTES
+            )));
+        }
+
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        file.take(MAX_RUST_FILE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .await?;
+        if bytes.len() as u64 > MAX_RUST_FILE_BYTES {
+            return Err(WorkspaceError::LimitExceeded(format!(
+                "{} grew beyond {} bytes while being read",
+                path.display(),
+                MAX_RUST_FILE_BYTES
+            )));
+        }
+        let content = String::from_utf8(bytes).map_err(|e| {
+            WorkspaceError::Io(format!("{} is not valid UTF-8: {e}", path.display()))
+        })?;
+        Ok(Some(content))
     }
 
     fn diff(
@@ -176,9 +291,24 @@ impl WorkspaceScanner {
 
     /// Iteratively (no async recursion) collect `.rs` files, skipping
     /// `target/`, VCS and hidden directories.
-    async fn collect_rs(root: &str) -> Result<Vec<PathBuf>, WorkspaceError> {
+    async fn collect_rs(root: &str) -> Result<(PathBuf, Vec<PathBuf>), WorkspaceError> {
+        let root_path = PathBuf::from(root);
+        let root_metadata = match tokio::fs::symlink_metadata(&root_path).await {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok((root_path, Vec::new()))
+            }
+            Err(e) => return Err(e.into()),
+        };
+        if root_metadata.file_type().is_symlink() || !root_metadata.file_type().is_dir() {
+            return Err(WorkspaceError::UnsafePath(format!(
+                "workspace root must be a real directory: {}",
+                root_path.display()
+            )));
+        }
+        let root = tokio::fs::canonicalize(&root_path).await?;
         let mut out = Vec::new();
-        let mut stack = vec![PathBuf::from(root)];
+        let mut stack = vec![root.clone()];
         while let Some(dir) = stack.pop() {
             let mut rd = match tokio::fs::read_dir(&dir).await {
                 Ok(rd) => rd,
@@ -190,7 +320,15 @@ impl WorkspaceScanner {
                     Ok(ft) => ft,
                     Err(_) => continue,
                 };
-                if file_type.is_dir() {
+                if file_type.is_symlink() {
+                    if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                        return Err(WorkspaceError::UnsafePath(format!(
+                            "refusing symbolic-link Rust source {}",
+                            path.display()
+                        )));
+                    }
+                    continue;
+                } else if file_type.is_dir() {
                     let name = entry.file_name();
                     let name = name.to_string_lossy();
                     if name == "target" || name == ".git" || name.starts_with('.') {
@@ -198,12 +336,17 @@ impl WorkspaceScanner {
                     }
                     stack.push(path);
                 } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    if out.len() == MAX_WORKSPACE_RUST_FILES {
+                        return Err(WorkspaceError::LimitExceeded(format!(
+                            "more than {MAX_WORKSPACE_RUST_FILES} Rust sources"
+                        )));
+                    }
                     out.push(path);
                 }
             }
         }
         out.sort();
-        Ok(out)
+        Ok((root, out))
     }
 }
 
@@ -342,6 +485,40 @@ mod tests {
             0,
             "no dangling edges after removal"
         );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn rejects_rust_symlink_outside_workspace() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_dir("symlink_root");
+        let outside = temp_dir("symlink_outside");
+        let sentinel = outside.join("sentinel.rs");
+        std::fs::write(&sentinel, "pub const OUTSIDE: bool = true;").unwrap();
+        symlink(&sentinel, dir.join("escaped.rs")).unwrap();
+
+        let mut scanner = WorkspaceScanner::new(dir.to_string_lossy().to_string());
+        let error = scanner.scan_workspace().await.unwrap_err();
+        assert!(matches!(error, WorkspaceError::UnsafePath(_)));
+        assert!(scanner.files.is_empty(), "outside source must not be indexed");
+
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_rust_source_before_reading_it() {
+        let dir = temp_dir("oversized");
+        let file = std::fs::File::create(dir.join("large.rs")).unwrap();
+        file.set_len(MAX_RUST_FILE_BYTES + 1).unwrap();
+
+        let mut scanner = WorkspaceScanner::new(dir.to_string_lossy().to_string());
+        let error = scanner.scan_workspace().await.unwrap_err();
+        assert!(matches!(error, WorkspaceError::LimitExceeded(_)));
+        assert!(scanner.files.is_empty(), "oversized source must not be indexed");
 
         std::fs::remove_dir_all(&dir).ok();
     }
