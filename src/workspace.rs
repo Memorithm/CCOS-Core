@@ -509,8 +509,6 @@ impl WorkspaceScanner {
         delta
     }
 
-    /// Iteratively (no async recursion) collect `.rs` files, skipping
-    /// `target/`, VCS and hidden directories.
 }
 
 #[cfg(test)]
