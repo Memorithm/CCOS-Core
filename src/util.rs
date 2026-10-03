@@ -87,6 +87,21 @@ fn write_durable_inner(path: &Path, bytes: &[u8], exclusive: bool) -> io::Result
             std::fs::create_dir_all(parent)?;
         }
     }
+    // Refuse an existing symlink or special file before preparing a replacement.
+    // `rename` never follows the raced target, so a later directory-entry race
+    // cannot modify the referent; this check preserves the stricter contract that
+    // persistence outputs themselves must be regular files.
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.file_type().is_file() => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "refusing non-regular persistence output",
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
     // Arm the cleanup guard only once `create_new` has *succeeded*, which proves
     // this call created the file: the guard can then never unlink a temp file
     // belonging to anyone else.
@@ -338,6 +353,28 @@ mod tests {
         let path = dir.join("nested").join("ws.ccos");
         write_durable(&path, b"ok").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"ok");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn write_durable_rejects_symlink_without_modifying_target() {
+        let dir = std::env::temp_dir().join(format!(
+            "ccos-durable-symlink-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("target");
+        let link = dir.join("link");
+        std::fs::write(&target, b"original").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&target, &link).unwrap();
+
+        assert!(write_durable(&link, b"replacement").is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"original");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

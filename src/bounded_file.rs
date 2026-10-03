@@ -1,7 +1,7 @@
 //! Bounded, fail-closed reads for persistence inputs.
 
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::Path;
 
 /// Open `path` without following its final symlink and require a regular file.
@@ -47,56 +47,6 @@ fn require_regular(file: File) -> io::Result<File> {
         ));
     }
     Ok(file)
-}
-
-/// Write `data` without following the final path component and require a regular file.
-///
-/// The descriptor is validated before truncation so a rejected symlink or other
-/// special file is never modified as a side effect of the check.
-#[cfg(unix)]
-pub(crate) fn write_regular_nofollow(path: &Path, data: &[u8]) -> io::Result<()> {
-    let fd = rustix::fs::open(
-        path,
-        rustix::fs::OFlags::WRONLY
-            | rustix::fs::OFlags::CREATE
-            | rustix::fs::OFlags::NOFOLLOW
-            | rustix::fs::OFlags::CLOEXEC
-            | rustix::fs::OFlags::NONBLOCK,
-        rustix::fs::Mode::from_bits_truncate(0o600),
-    )?;
-    write_validated(File::from(fd), data)
-}
-
-#[cfg(windows)]
-pub(crate) fn write_regular_nofollow(path: &Path, data: &[u8]) -> io::Result<()> {
-    use std::os::windows::fs::OpenOptionsExt;
-
-    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)?;
-    write_validated(file, data)
-}
-
-#[cfg(not(any(unix, windows)))]
-pub(crate) fn write_regular_nofollow(_path: &Path, _data: &[u8]) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "secure no-follow persistence writes are unavailable on this platform",
-    ))
-}
-
-fn write_validated(mut file: File, data: &[u8]) -> io::Result<()> {
-    if !file.metadata()?.file_type().is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "refusing non-regular persistence output",
-        ));
-    }
-    file.set_len(0)?;
-    file.write_all(data)
 }
 
 /// Read at most `limit + 1` bytes, rejecting oversize inputs before parsing.
@@ -179,23 +129,4 @@ mod tests {
         std::fs::remove_dir(path).ok();
     }
 
-    #[cfg(any(unix, windows))]
-    #[test]
-    fn writer_rejects_symlink_without_modifying_target() {
-        let target = temp_path("write_target");
-        let link = temp_path("write_link");
-        File::create(&target)
-            .unwrap()
-            .write_all(b"original")
-            .unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        #[cfg(windows)]
-        std::os::windows::fs::symlink_file(&target, &link).unwrap();
-
-        assert!(write_regular_nofollow(&link, b"replacement").is_err());
-        assert_eq!(std::fs::read(&target).unwrap(), b"original");
-        std::fs::remove_file(link).ok();
-        std::fs::remove_file(target).ok();
-    }
 }
