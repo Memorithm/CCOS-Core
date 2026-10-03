@@ -309,7 +309,7 @@ mod tests {
     /// Names of every `.tmp` sibling sitting in `dir`.
     #[cfg(test)]
     fn temp_debris(dir: &std::path::Path) -> Vec<String> {
-        let Ok(entries) = std::fs::read(dir) else {
+        let Ok(entries) = std::fs::read_dir(dir) else {
             return Vec::new();
         };
         let mut found: Vec<String> = entries
