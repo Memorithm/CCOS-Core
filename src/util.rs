@@ -48,13 +48,18 @@ pub fn from_hex32(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-/// Write `bytes` to `path` **durably and atomically**: write to a temporary
-/// sibling, `fsync` it, rename it over `path`, then best-effort `fsync` the
-/// parent directory. After this returns the data has reached stable storage and
-/// `path` is never left half-written — the basis of CCOS's "replayable after a
-/// crash" guarantee. A plain [`std::fs::write`] only reaches the kernel page
-/// cache, so a power loss or daemon crash can corrupt or truncate the file. The
-/// extra cost is one `fsync`, negligible at an agent's inference cadence.
+/// Publish a complete file through an exclusively-created temporary sibling.
+///
+/// On Unix the sibling is private from creation, its contents and metadata are
+/// synced before atomic rename, and the containing directory and its ancestors
+/// are synced afterwards. Directory-sync errors are returned, never discarded.
+/// Syncing ancestors also covers directory entries created by `create_dir_all`.
+///
+/// An error after publication can leave the complete new file visible with
+/// durability unconfirmed; it does not imply that the old file was restored.
+/// Outside Unix, directory sync remains best-effort for compatibility, so this
+/// function does not promise portable power-loss durability. Callers must own a
+/// trusted parent namespace; this is neither a directory sandbox nor a file CAS.
 pub fn write_durable(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_durable_inner(path, bytes, false)
 }
@@ -78,6 +83,17 @@ pub fn write_durable_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 fn write_durable_inner(path: &Path, bytes: &[u8], exclusive: bool) -> io::Result<()> {
+    write_durable_using(path, exclusive, |f| f.write_all(bytes), sync_parent_directories)
+}
+
+// The private callbacks allow deterministic fault injection without a global
+// failpoint or a production option that could skip a durability requirement.
+fn write_durable_using(
+    path: &Path,
+    exclusive: bool,
+    write_contents: impl FnOnce(&mut File) -> io::Result<()>,
+    sync_directories: impl FnOnce(&Path) -> io::Result<()>,
+) -> io::Result<()> {
     // Ensure the target directory exists — a workspace path like `.ccos/ws.ccos`
     // (an editor's default) must not fail to persist just because `.ccos/` was
     // never created. Without this the checkpoint silently fails and every run is
@@ -88,9 +104,8 @@ fn write_durable_inner(path: &Path, bytes: &[u8], exclusive: bool) -> io::Result
         }
     }
     // Refuse an existing symlink or special file before preparing a replacement.
-    // `rename` never follows the raced target, so a later directory-entry race
-    // cannot modify the referent; this check preserves the stricter contract that
-    // persistence outputs themselves must be regular files.
+    // Rename never follows the final target. A later race can replace that
+    // directory entry, but cannot modify the symlink's referent through it.
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if !metadata.file_type().is_file() => {
             return Err(io::Error::new(
@@ -108,7 +123,7 @@ fn write_durable_inner(path: &Path, bytes: &[u8], exclusive: bool) -> io::Result
     let (mut file, mut tmp) = create_temp_sibling(path)?;
     #[cfg(unix)]
     file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-    file.write_all(bytes)?;
+    write_contents(&mut file)?;
     file.sync_all()?; // flush contents + metadata to disk before we publish
     drop(file);
 
@@ -122,14 +137,30 @@ fn write_durable_inner(path: &Path, bytes: &[u8], exclusive: bool) -> io::Result
         tmp.keep(); // renamed away: there is nothing left to unlink
     }
 
-    // Make the publication itself durable by fsync-ing the directory entry.
-    // Opening a directory for fsync is not portable everywhere, so best-effort.
     let dir = match path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),
     };
-    if let Ok(d) = File::open(dir) {
-        let _ = d.sync_all();
+    sync_directories(dir)
+}
+
+#[cfg(unix)]
+fn sync_parent_directories(dir: &Path) -> io::Result<()> {
+    // Include existing ancestors too: a preceding failed save may have created
+    // them without making their own directory entries durable. Merely finding
+    // them on disk is not evidence that their parent was already synced.
+    let canonical = dir.canonicalize()?;
+    for ancestor in canonical.ancestors() {
+        File::open(ancestor)?.sync_all()?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directories(dir: &Path) -> io::Result<()> {
+    // Preserve the legacy non-Unix behavior without claiming Unix guarantees.
+    if let Ok(directory) = File::open(dir) {
+        let _ = directory.sync_all();
     }
     Ok(())
 }
@@ -182,17 +213,20 @@ fn create_temp_sibling(path: &Path) -> io::Result<(File, TempSibling)> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static ATTEMPT: AtomicU64 = AtomicU64::new(0);
 
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    // Setting permissions only after open leaves a window in which a different
+    // user can acquire a readable descriptor. Mode must be private at creation.
+    #[cfg(unix)]
+    options.mode(0o600);
+
     let mut last = None;
     for _ in 0..16 {
         let n = ATTEMPT.fetch_add(1, Ordering::Relaxed);
         let mut name = path.as_os_str().to_os_string();
         name.push(format!(".tmp.{}.{n}", std::process::id()));
         let candidate = std::path::PathBuf::from(name);
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
+        match options.open(&candidate) {
             Ok(f) => {
                 return Ok((
                     f,
@@ -215,7 +249,7 @@ fn create_temp_sibling(path: &Path) -> io::Result<(File, TempSibling)> {
 }
 
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 #[cfg(test)]
 mod tests {
@@ -282,15 +316,7 @@ mod tests {
         found
     }
 
-    /// A failed save must not poison the next one.
-    ///
-    /// Every step after the temp file is created can fail, and each `?` used to
-    /// return early leaving `<path>.tmp.<pid>` behind. Since that name depended
-    /// only on the pid, the next call hit `create_new` on an existing file and
-    /// failed with `AlreadyExists` — and so did every call after it, for the life
-    /// of the process. A single transient I/O error became a permanent outage
-    /// that only a restart cleared: `ccos-license-server` answering 500 to every
-    /// sale while `/healthz` stayed green.
+    /// Rejecting a directory must not prevent a subsequent healthy save.
     #[test]
     fn a_failed_write_leaves_no_debris_and_does_not_latch() {
         let dir = std::env::temp_dir().join(format!("ccos-durable-latch-{}", std::process::id()));
@@ -298,24 +324,77 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("state.ccos");
 
-        // Fail *after* the temp file exists: renaming onto a directory cannot work.
+        // The non-regular destination is rejected before creating a sibling.
         std::fs::create_dir(&path).unwrap();
         let failed = write_durable(&path, b"first attempt");
-        assert!(failed.is_err(), "renaming onto a directory must fail");
-        assert_eq!(
-            temp_debris(&dir),
-            Vec::<String>::new(),
-            "the temp sibling must not outlive the failed attempt"
-        );
+        assert!(failed.is_err(), "a directory destination must fail");
+        assert_eq!(temp_debris(&dir), Vec::<String>::new());
 
-        // With the obstruction gone a healthy save must succeed. Before the fix
-        // this returned AlreadyExists, having tripped over its own debris.
         std::fs::remove_dir(&path).unwrap();
         write_durable(&path, b"second attempt").expect("the failure must not latch");
         assert_eq!(std::fs::read(&path).unwrap(), b"second attempt");
         assert_eq!(temp_debris(&dir), Vec::<String>::new());
-
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn partial_write_failure_preserves_old_target_and_cleans_temp() {
+        let dir = std::env::temp_dir().join(format!("ccos-partial-write-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("snapshot.json");
+        write_durable(&path, b"previous complete snapshot").unwrap();
+        let error = write_durable_using(
+            &path,
+            false,
+            |file| {
+                file.write_all(b"partial replacement")?;
+                Err(io::Error::other("injected write failure"))
+            },
+            |_| panic!("failed write must not reach directory synchronization"),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "injected write failure");
+        assert_eq!(std::fs::read(&path).unwrap(), b"previous complete snapshot");
+        assert_eq!(temp_debris(&dir), Vec::<String>::new());
+        write_durable(&path, b"healthy retry").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"healthy retry");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn directory_sync_failure_is_not_reported_as_success() {
+        let dir = std::env::temp_dir().join(format!("ccos-sync-failure-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("snapshot.json");
+        let error = write_durable_using(
+            &path,
+            false,
+            |file| file.write_all(b"complete but durability unconfirmed"),
+            |_| Err(io::Error::other("injected directory sync failure")),
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "injected directory sync failure");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            b"complete but durability unconfirmed"
+        );
+        assert_eq!(temp_debris(&dir), Vec::<String>::new());
+        write_durable(&path, b"confirmed retry").unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temporary_sibling_is_private_before_any_chmod() {
+        let dir = std::env::temp_dir().join(format!("ccos-private-temp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (file, guard) = create_temp_sibling(&dir.join("snapshot.json")).unwrap();
+        assert_eq!(file.metadata().unwrap().permissions().mode() & 0o077, 0);
+        drop(file);
+        drop(guard);
+        assert_eq!(temp_debris(&dir), Vec::<String>::new());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// Debris from a cause `Drop` cannot cover — a `SIGKILL` between create and
@@ -359,10 +438,7 @@ mod tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn write_durable_rejects_symlink_without_modifying_target() {
-        let dir = std::env::temp_dir().join(format!(
-            "ccos-durable-symlink-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("ccos-durable-symlink-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let target = dir.join("target");
