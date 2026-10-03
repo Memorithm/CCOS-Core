@@ -83,7 +83,12 @@ pub fn write_durable_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 fn write_durable_inner(path: &Path, bytes: &[u8], exclusive: bool) -> io::Result<()> {
-    write_durable_using(path, exclusive, |f| f.write_all(bytes), sync_parent_directories)
+    write_durable_using(
+        path,
+        exclusive,
+        |f| f.write_all(bytes),
+        sync_parent_directories,
+    )
 }
 
 // The private callbacks allow deterministic fault injection without a global
@@ -304,7 +309,7 @@ mod tests {
     /// Names of every `.tmp` sibling sitting in `dir`.
     #[cfg(test)]
     fn temp_debris(dir: &std::path::Path) -> Vec<String> {
-        let Ok(entries) = std::fs::read_dir(dir) else {
+        let Ok(entries) = std::fs::read(dir) else {
             return Vec::new();
         };
         let mut found: Vec<String> = entries
