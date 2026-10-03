@@ -32,7 +32,7 @@ pub(crate) fn open_regular_nofollow(path: &Path) -> io::Result<File> {
 }
 
 #[cfg(not(any(unix, windows)))]
-pub(crate) fn open_regular_nofollow(_path: &Path) -> io::Result<File> {
+pub(crate) fn open_regular_nofollow(_path: &Path, _data: &[u8]) -> io::Result<File> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "secure no-follow persistence reads are unavailable on this platform",
@@ -128,5 +128,4 @@ mod tests {
         assert!(read_regular_bounded(&path, 8).is_err());
         std::fs::remove_dir(path).ok();
     }
-
 }
