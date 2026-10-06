@@ -44,7 +44,7 @@ jobs:
           path: |
             fuzz/corpus/persistence_blob/
             fuzz/artifacts/persistence_blob/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
 
   reproducibility:

@@ -7,6 +7,11 @@ edition = "2021"
 [package.metadata]
 cargo-fuzz = true
 
+# Keep the fuzz harness on its dedicated nightly toolchain and outside the
+# production workspace, whose MSRV and lockfile remain independently enforced.
+[workspace]
+members = ["."]
+
 [dependencies]
 libfuzzer-sys = "0.4"
 ccos-core = { path = "..", default-features = false, features = ["license"] }
