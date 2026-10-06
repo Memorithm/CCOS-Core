@@ -33,7 +33,9 @@ jobs:
           mkdir -p fuzz/corpus/persistence_blob fuzz/artifacts/persistence_blob
           cargo +"${FUZZ_TOOLCHAIN}" install cargo-fuzz \
             --version "${CARGO_FUZZ_VERSION}" --locked
-          timeout --signal=TERM --kill-after=15s 120s \
+          timeout --signal=TERM --kill-after=15s 300s \
+            cargo +"${FUZZ_TOOLCHAIN}" fuzz build persistence_blob
+          timeout --signal=TERM --kill-after=15s 90s \
             cargo +"${FUZZ_TOOLCHAIN}" fuzz run persistence_blob -- \
             -max_total_time=60 -artifact_prefix=fuzz/artifacts/persistence_blob/
       - name: retain fuzz corpus and crash artifacts
