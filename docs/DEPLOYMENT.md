@@ -15,11 +15,8 @@ The `ccos` binary **requires the `llm` feature** (it drives the async MCP server
 # Community / core deployment:
 cargo build --release --features llm,license
 
-# CCOS_EXTENDED premium deployment — every deterministic Pro tier, replay-safe:
-cargo build --release --features llm,pro-default
-
-# Everything incl. the REPLAY-RELAX full kernels (test/CI; see docs/DETERMINISM.md):
-cargo build --release --features llm,all-full
+# Core with the optional distilled memory-provider backend:
+cargo build --release --features llm,license,slhav2
 ```
 
 | feature | gives you | default |
@@ -33,17 +30,14 @@ cargo build --release --features llm,all-full
 | `mimalloc` | a faster allocator (benchmarking only) | optional |
 | `neural-embed` | quarantined **local** neural embedder (Ollama `/api/embeddings`; REPLAY-RELAX) | optional |
 | `slhav2` | the distilled zero-dep SLHAv2 tile backend (`replay == live`) | optional |
-| `slhav2-full` | the REAL `ccos-scirust` kernel — SIMD scoring, `ElasticKvCache`, `LatentSafetyGuard`, the `slha.*` MCP tools + `ccos slha` (Pro-gated; REPLAY-RELAX) | optional |
-| `octasoma` | the OctaSoma semantic-memory backend + the `octa-semantic` recall strategy (Pro-gated) | optional |
-| `octacore` | the causal-narrow → cosine-rerank cascade — the `octa.*` MCP tools + `ccos octa` (Pro-gated; implies `octasoma`) | optional |
-| `rsi` | the CERVO/RSI self-improvement core — the `rsi.*` MCP status tools + `ccos rsi` (Pro-gated) | optional |
-| `rsi-dgm` | the Linux OS-sandboxed Darwin–Gödel Machine loop (typed API only; Pro-gated; REPLAY-RELAX) | optional |
-| `rsi-full` | RSI + a local LLM proposer backend (REPLAY-RELAX) | optional |
-| `pro-default` | **bundle**: every deterministic premium tier (`license`, `license-pq`, `signed-sync`, `slhav2`, `octasoma`, `octacore`, `rsi`, `learned-embed`) — replays bit-identically | premium |
-| `all-full` | **bundle**: `pro-default` + every REPLAY-RELAX full kernel | test/CI |
+The table above is exhaustive for this repository and is checked against
+`Cargo.toml` by `tests/capability_matrix_contract.rs`. Full SLHAv2,
+OctaSoma/OctaCore, CERVO/RSI and Forge capabilities are external Research Lab
+concerns, not hidden or premium CCOS Core features.
 
-The **default build** (nothing beyond `syn-parser`) compiles none of the premium crates — its
-dependency tree is byte-identical to core CCOS, and the CI's byte-identity guard enforces that.
+The **default build** enables only `syn-parser`; it contains no external
+research component. See [CORE_CAPABILITIES.md](CORE_CAPABILITIES.md) for source
+and test evidence.
 
 ## 2. Install
 
@@ -52,24 +46,12 @@ install -m 755 target/release/ccos /usr/local/bin/ccos
 ccos doctor
 ```
 
-### 2a. DGM and Forge host requirements
+### 2a. Research execution is external
 
-Generated-code evaluation is supported on Linux with `/usr/bin/bwrap`,
-`/usr/bin/prlimit`, and the exact Rust 1.89.0 rustup toolchain. Install the host
-packages on Debian/Ubuntu with:
-
-```sh
-sudo apt-get install --yes --no-install-recommends bubblewrap util-linux
-```
-
-Run the service as a dedicated non-root account. UID 0 is refused unless the
-development-only `CCOS_UNSAFE_ALLOW_ROOT_SANDBOX=1` override is supplied to an
-individual test command. The override never permits direct execution or GPU,
-network, home, credential, or socket access. Non-Linux deployment can run the
-deterministic CCOS core, but generated-code execution fails closed.
-
-The Jetson GPU is deliberately unavailable to untrusted Forge/DGM candidates.
-No production profile in this repository mounts NVIDIA device nodes.
+CCOS Core does not execute Forge, DGM or generated-code candidates and therefore
+has no bubblewrap, `prlimit`, GPU-device or candidate-toolchain deployment
+requirements. Those concerns belong to CCOS Research Lab and its qualified
+execution backend.
 
 `ccos doctor` (or `ccos doctor --json` for machines) prints, e.g.:
 
@@ -81,7 +63,7 @@ ccos doctor — deployment self-check
   target       x86_64-linux
   parser       syn AST (accurate)
   features     llm=yes license=yes license-pq=yes syn-parser=yes learned-embed=no mimalloc=no signed-sync=no
-  premium      slhav2=no slhav2-full=no octasoma=no octacore=no rsi=no rsi-dgm=no
+  optional     slhav2=no neural-embed=no
   mcp          ready  (ccos mcp <workspace>)
 
   license
@@ -225,28 +207,9 @@ causal graph, Q-Page, and recall are **never** gated):
 - **adaptive-retrieval** — the `ccos::retrieval` self-improving feedback loop (`ImprovementLoop`).
   The core retrieval (dense / BM25 / hybrid + metrics) is free and fully functional; only the
   continuous-improvement tier is gated.
-- **octasoma-memory** — the OctaSoma-backed, region-sharded semantic-anchor index
-  (`ccos::octa_index`, compiled behind the `octasoma` cargo feature). The free core recall
-  strategies (working-set / around / task / INT4 TF-IDF semantic / hybrid) are untouched; only the
-  true-embedding OctaSoma backend is Pro. The tier includes the **explicit relevance-feedback
-  channel** (`SemanticFeedback`, and the `octa_feedback` MCP tool): labels from the agent loop
-  certify a conformal anchor-score floor (miscoverage ≤ α), and `recall_semantic_calibrated` /
-  the MCP `octa-semantic` strategy then trust an anchor only when it clears the floor — refusals
-  are visible (`octa-semantic-below-floor-fallback-task`), never a silent downgrade, and with too
-  few labels no floor is fabricated.
-- **slhav2-full-kernel** *(CCOS_EXTENDED, `slhav2-full` cargo feature)* — the REAL `ccos-scirust`
-  attention kernel as a `MemoryProvider` backend: runtime-dispatched SIMD scoring, `ElasticKvCache`
-  HOT/WARM/COLD soft-paging with informed eviction, the `LatentSafetyGuard`, and the `slha.*` MCP
-  tools / `ccos slha` CLI. A documented REPLAY-RELAX (see `docs/DETERMINISM.md`); the distilled
-  `slhav2` backend stays the replay-exact store.
-- **rsi-self-improvement** *(CCOS_EXTENDED, `rsi` cargo feature)* — running the CERVO/RSI agent
-  with CCOS audit (`CcosAudit`: rsi's audit log over CCOS's hash-chained `EventLog`), plus the
-  `rsi.*` MCP status tools / `ccos rsi` CLI. The std-only core keeps `replay == live`.
-- **rsi-dgm** *(CCOS_EXTENDED, `rsi-dgm` cargo feature)* — the Linux OS-sandboxed Darwin–Gödel Machine
-  loop (`GuardedDgm`: editable-file allowlist, GuardLayer sanitation, air-gapped
-  `cargo --offline --frozen` evaluator, hash-chain-audited promotion). Deliberately reachable
-  **only** through the typed API — no MCP tool and no CLI one-liner can trigger self-modification.
-  A documented REPLAY-RELAX.
+`slhav2` is the only optional memory-provider feature in this repository; it
+selects the distilled replay-exact in-tree provider. Full SLHAv2, OctaSoma and
+RSI capabilities are external and are not unlocked by a Core license.
 
 `ccos license` enumerates the active set; `ccos doctor` reports the compiled verifier scheme(s).
 

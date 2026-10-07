@@ -27,27 +27,22 @@ rails.
 
 ---
 
-## CCOS_EXTENDED — the premium fused edition
+## Product boundary and shipped capabilities
 
-This repository is **CCOS_EXTENDED**: CCOS (the hub, unchanged by default) fused
-with the org's three other engines, each vendored as a workspace crate and
-reachable only behind an opt-in cargo feature **plus** the offline Pro license:
+This repository is **CCOS Core**, not the former fused `CCOS_EXTENDED`
+product. Its build graph contains the Core package and the distilled,
+zero-dependency `ccos-memory-runtime` workspace member only. SLHAv2 full
+kernels, OctaSoma/OctaCore, CERVO/RSI, Forge, generated-code execution and
+self-modification belong to
+[CCOS Research Lab](https://github.com/Memorithm/CCOS-Research-Lab) or their
+own repositories; they are not features, crates, CLI commands or MCP namespaces
+shipped by this repository.
 
-| Fused source | Crate(s) | Feature | What it adds |
-|---|---|---|---|
-| **SLHAv2** | `ccos-scirust{,-mcp,-c,-python}` | `slhav2-full` | the real SLHA v2 attention kernel: 128-byte KV tiles, INT4/grouped/NF4/mixed/**TQ3 (TurboQuant)** codecs, SIMD score paths, `ElasticKvCache` soft-paging backend, `LatentSafetyGuard` |
-| **OctaSoma** | `ccos-octasoma`, `ccos-octacore` | `octasoma`, `octacore` | semantic memory + the validated causal-narrow → cosine-rerank **cascade** |
-| **CERVO/RSI** | `ccos-rsi` | `rsi`, `rsi-dgm`, `rsi-full` | the recursive self-improvement engine; the DGM loop runs only through the hard-sandboxed `GuardedDgm` API (allowlist + air-gapped evaluator + hash-chain audit) |
-
-One MCP server multiplexes the four namespaces (`ccos.*` + `slha.*` + `octa.*`
-+ `rsi.*`) and the CLI mirrors it (`ccos slha|octa|rsi …`). Bundles:
-`--features pro-default` (every deterministic premium tier, replay-safe) and
-`--features all-full` (adds the documented REPLAY-RELAX kernels; test/CI).
-**The default build stays byte-identical to CCOS** — `cargo tree` links no
-premium crate (CI-enforced), the air-gap egress posture is fail-closed, and
-every community-tier refusal is visible, never a silent downgrade. See
-`docs/FUSION_PLAN.md` (architecture, P0–P6), `docs/AUDIT_FUSION_2026-07.md`
-(fusion & security audit) and `docs/DETERMINISM.md` (the replay boundary).
+The authoritative [Core capability matrix](docs/CORE_CAPABILITIES.md) is
+derived from `Cargo.toml` and names the source and regression evidence for
+every optional feature. A contract test rejects removed fused feature names or
+claims that drift away from the manifest. Historical fusion documents are
+retained as research records, not as deployment instructions.
 
 ---
 
@@ -196,9 +191,8 @@ measurements behind the numbers above are in
   `causal_flash` (a bounded causal-cone context window rooted at the active
   frontier — a high-density, token-budgeted summary that scales without recomputing
   global centrality), and the OpenClaw contract pair `get` (read an ingested file by
-  path) / `sync` (boot/refresh checkpoint ack). Fused CCOS_EXTENDED builds multiplex
-  the Pro namespaces `slha.*` / `octa.*` / `rsi.*` into the same server (see
-  `docs/MEMORY_INTERFACE.md` for the full catalogue).
+  path) / `sync` (boot/refresh checkpoint ack). This repository exposes only
+  the Core namespace; Research Lab integrations remain external.
 - **Dynamic resources.** `ccos://session/context` exposes the self-bounding working
   set, **reversibly compressed** by default (`CCOS_COMPRESS_CONTEXT=0` to disable for
   A/B), for the host to drop into its system prompt; `ccos://session/timeline` exposes
@@ -430,7 +424,7 @@ Module reference: `cargo doc --open` (every module has rustdoc), or
 
 ```bash
 cargo test                     # the default-features unit, integration & doc suite
-cargo test --features pro-default   # + every deterministic premium tier (CCOS_EXTENDED)
+cargo test --all-features       # every feature declared by this Core manifest
 cargo clippy --all-targets --all-features   # lint-clean (-D warnings in CI)
 cargo test -- --ignored        # opt-in: 1,000,000-cycle long-stability run
 ```

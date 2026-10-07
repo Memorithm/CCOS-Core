@@ -229,7 +229,7 @@ advertises **sixteen core tools**:
 | Tool | Arguments | Maps to |
 | ---- | --------- | ------- |
 | `ingest` | `uri`, `source` | `ingest_source` |
-| `recall` | `strategy` ∈ `around`/`task`/`semantic`/`hybrid`/`working_set`/`causal-flash` (+ the Pro `octa-semantic` in `octasoma` builds), `anchor`/`text`, `budget` — plus the OpenClaw aliases `query`/`limit`/`minScore`/`sessionKey` | `recall` |
+| `recall` | `strategy` ∈ `around`/`task`/`semantic`/`hybrid`/`working_set`/`causal-flash`, `anchor`/`text`, `budget` — plus the OpenClaw aliases `query`/`limit`/`minScore`/`sessionKey` | `recall` |
 | `signal_failure` | `node`, `depth` | `signal_failure` |
 | `page_fault` | `output` (cargo-test/panic text), `budget` | parse trace → signal faulting files → recall |
 | `stats` | — | `stats` |
@@ -251,19 +251,10 @@ agent's memory to a past step under different parameters (a larger budget, a
 different anchor) — debugging an agent's context by rewinding it. The analysis tools
 are read-only, so they never trigger a checkpoint.
 
-**Premium namespaces (CCOS_EXTENDED).** In fused builds the same server also
-multiplexes three feature-gated namespaces, each Pro-gated at runtime by the
-offline license (visible `isError` refusal on the community tier — never a silent
-downgrade; the `*.explain` tools are free prose):
-
-| Namespace | Cargo feature | Tools |
-| --------- | ------------- | ----- |
-| `slha.*` | `slhav2-full` | `explain`, `audit` (kernel self-audit), `compress` (codec-selectable: `int4`/`grouped`/`nf4`/`mixed`/`tq3`), `score`, `benchmark` |
-| `octa.*` | `octacore` | `explain`, `cascade_recall` (causal-narrow → exact-cosine rerank over the live session, read-only) |
-| `rsi.*` | `rsi` | `explain`, `status` (compiled capabilities + license gates) — **no execution tools by design**: DGM self-modification is unreachable over MCP |
-
-An `octasoma` build additionally advertises the `octa_feedback` tool (the
-relevance-feedback channel calibrating the `octa-semantic` conformal anchor gate).
+**Product boundary.** CCOS Core does not multiplex `slha.*`, `octa.*` or
+`rsi.*` namespaces. Full SLHAv2, OctaSoma/OctaCore and CERVO/RSI belong to
+their owning repositories or CCOS Research Lab and must integrate through
+explicit versioned contracts. See [CORE_CAPABILITIES.md](CORE_CAPABILITIES.md).
 
 Each `tools/call` returns the corresponding `Serialize` type (above) as JSON inside
 the MCP `content[0].text` field. Tool-level failures come back as
