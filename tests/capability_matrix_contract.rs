@@ -1,18 +1,8 @@
+use std::collections::BTreeSet;
+
 const MANIFEST: &str = include_str!("../Cargo.toml");
 const README: &str = include_str!("../README.md");
 const MATRIX: &str = include_str!("../docs/CORE_CAPABILITIES.md");
-
-const SHIPPED_FEATURES: &[&str] = &[
-    "syn-parser",
-    "llm",
-    "mimalloc",
-    "learned-embed",
-    "license",
-    "license-pq",
-    "signed-sync",
-    "slhav2",
-    "neural-embed",
-];
 
 const EXTERNAL_FEATURE_NAMES: &[&str] = &[
     "slhav2-full",
@@ -39,20 +29,36 @@ fn defines_feature(section: &str, feature: &str) -> bool {
         .any(|line| line.starts_with(&format!("{feature} =")))
 }
 
+fn manifest_features(section: &'static str) -> BTreeSet<&'static str> {
+    section
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let (name, _) = line.split_once(" =")?;
+            (name != "default").then_some(name)
+        })
+        .collect()
+}
+
+fn matrix_features() -> BTreeSet<&'static str> {
+    MATRIX
+        .lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("| `")?;
+            let (name, _) = rest.split_once("` |")?;
+            Some(name)
+        })
+        .collect()
+}
+
 #[test]
 fn capability_matrix_matches_the_manifest_and_product_boundary() {
     let features = feature_section();
-
-    for feature in SHIPPED_FEATURES {
-        assert!(
-            defines_feature(features, feature),
-            "matrix names missing Cargo feature {feature}"
-        );
-        assert!(
-            MATRIX.contains(&format!("| `{feature}` |")),
-            "matrix is missing shipped feature {feature}"
-        );
-    }
+    assert_eq!(
+        manifest_features(features),
+        matrix_features(),
+        "capability matrix must enumerate every non-default Cargo feature exactly"
+    );
 
     for feature in EXTERNAL_FEATURE_NAMES {
         assert!(
