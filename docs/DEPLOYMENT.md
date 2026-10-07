@@ -218,3 +218,10 @@ Every checkpoint is **crash- and power-safe**. `util::write_durable` writes a te
 **atomically renames** it into place, then `fsync`s the parent directory — the snapshot is never left
 half-written, and the hash-chained event log detects any tampering on reload. Durability is at
 **checkpoint granularity**: the agent / MCP flow checkpoints to the workspace, so both the causal
+memory and the replayable timeline survive a restart or a sudden power loss.
+
+## One-shot
+
+`scripts/install.sh` does build → install → `ccos doctor` in one step
+(`PREFIX=/usr/local/bin CCOS_FEATURES=llm,license sh scripts/install.sh`; add `,license-pq` to also
+compile the post-quantum SLH-DSA verifier — see §4b).

@@ -29,15 +29,28 @@ fn defines_feature(section: &str, feature: &str) -> bool {
         .any(|line| line.starts_with(&format!("{feature} =")))
 }
 
-fn manifest_features(section: &'static str) -> BTreeSet<&'static str> {
+fn manifest_features(section: &str) -> BTreeSet<&str> {
     section
         .lines()
         .filter_map(|line| {
             let line = line.trim();
-            let (name, _) = line.split_once(" =")?;
+            if line.starts_with('#') {
+                return None;
+            }
+            let (name, _) = line.split_once('=')?;
+            let name = name.trim();
             (name != "default").then_some(name)
         })
         .collect()
+}
+
+#[test]
+fn feature_parser_ignores_comments_and_default_but_keeps_new_features() {
+    let section = "# Default = the sync core\ndefault=[\"sync\"]\nsync = []\nfuture-feature=[]\n";
+    assert_eq!(
+        manifest_features(section),
+        BTreeSet::from(["sync", "future-feature"])
+    );
 }
 
 fn matrix_features() -> BTreeSet<&'static str> {
