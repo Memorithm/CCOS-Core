@@ -27,7 +27,7 @@ const EXTERNAL_FEATURE_NAMES: &[&str] = &[
 
 fn feature_section() -> &'static str {
     let (_, after_header) = MANIFEST
-        .split_once("[features]")
+        .split_once("\n[features]\n")
         .expect("Cargo.toml must define [features]");
     after_header.split("\n[").next().unwrap_or(after_header)
 }
