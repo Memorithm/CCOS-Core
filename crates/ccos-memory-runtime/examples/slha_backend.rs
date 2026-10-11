@@ -5,7 +5,7 @@
 //! Run: `cargo run -p ccos-memory-runtime --example slha_backend`
 
 use ccos_memory_runtime::backend::slha_adapter::SlhaAdapter;
-use ccos_memory_runtime::telemetry::MemoryState;
+use ccos_memory_runtime::telemetry::{MemoryState, RestoreFidelity};
 use ccos_memory_runtime::traits::MemoryProvider;
 use ccos_memory_runtime::AlignedMemoryPage;
 
@@ -25,20 +25,25 @@ fn main() {
     );
     assert_eq!(adapter.state(42).unwrap(), MemoryState::Hot);
 
-    // HOT → WARM: compress reclaims the 32-byte residual; the latent K/V is preserved.
+    // HOT → WARM: the residual is removed logically; the fixed resident slot is preserved.
     let r = adapter.compress(42).unwrap();
     let latent = r.representation.as_ref().map(|v| v.len()).unwrap_or(0);
     println!(
-        "  compress(42)  {:?} → {:?}   → {} B → {} B  ({} B reclaimed),  latent = {} f32,  Δquality {:.4}",
+        "  compress(42)  {:?} → {:?}   → logical {} B → {} B; resident {} B → {} B; released = {}; latent = {} f32; Δquality {:.4}",
         r.previous_state,
         r.new_state,
-        r.bytes_before,
-        r.bytes_after,
-        r.bytes_before - r.bytes_after,
+        r.logical_bytes_before,
+        r.logical_bytes_after,
+        r.resident_bytes_before,
+        r.resident_bytes_after,
+        r.resident_storage_released,
         latent,
         r.quality_delta,
     );
-    assert_eq!((r.bytes_before, r.bytes_after), (128, 96));
+    assert_eq!((r.logical_bytes_before, r.logical_bytes_after), (128, 96));
+    assert_eq!(r.resident_bytes_before, r.resident_bytes_after);
+    assert!(!r.resident_storage_released);
+    assert_eq!(r.restore_fidelity, RestoreFidelity::Approximate);
     assert_eq!(adapter.state(42).unwrap(), MemoryState::Warm);
 
     // compress is a HOT→WARM transition ONLY — a WARM page is rejected (the transition guard).
@@ -64,7 +69,7 @@ fn main() {
     assert_eq!(adapter.state(42).unwrap(), MemoryState::Cold);
 
     println!(
-        "\n→ WARM footprint = 96 B (latent 64 + metadata 32; only the 32-byte residual is freed),\n\
+        "\n→ WARM logical footprint = 96 B (latent 64 + metadata 32); the fixed resident slot is unchanged,\n\
          matching `scirust::ccos_core::WARM_BYTES`. No `scirust` is pulled — the decode is vendored, so\n\
          the default CCOS build stays byte-identical; the backend is reached only via `--features slhav2`."
     );

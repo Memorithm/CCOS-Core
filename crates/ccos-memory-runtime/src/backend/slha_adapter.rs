@@ -29,10 +29,11 @@
 //! [118..120) flags            2 B  u16  (HOT / WARM)
 //! [120..128) group_scales     8 B  MX micro-scales
 //! ```
-//! `compress` (HOT→WARM) reclaims the 32-byte residual — logical footprint
-//! **128 → 96 B** — while preserving the latent.
+//! `compress` (HOT→WARM) zeroes the 32-byte residual — logical footprint
+//! **128 → 96 B** — while preserving the latent. The fixed page slot remains
+//! resident and unchanged; this transition does not claim allocator or RSS savings.
 
-use crate::telemetry::{CompressionResult, MemoryBackend, MemoryState};
+use crate::telemetry::{CompressionResult, MemoryBackend, MemoryState, RestoreFidelity};
 use crate::traits::{MemoryProvider, MemoryResult, MemoryRuntimeError};
 use crate::AlignedMemoryPage;
 
@@ -42,7 +43,7 @@ const RESIDUAL_WORDS: usize = 4; // 256-bit residual = 4×u64
 const GROUP_DIM: usize = 16; // dims per MX group (128 / 8)
 const FLAG_WARM: u16 = 1 << 0;
 const HOT_BYTES: usize = 128;
-const WARM_BYTES: usize = 96; // HOT − 32-byte residual
+const WARM_BYTES: usize = 96; // logical HOT minus the 32-byte residual
 
 // Byte offsets within the 128-byte payload (see module docs).
 const OFF_LATENT: usize = 0;
@@ -172,6 +173,15 @@ impl MemoryProvider for SlhaAdapter {
         }
 
         let started = std::time::Instant::now();
+        // Approximate restore changes the lifecycle state but cannot recreate the
+        // residual. Keep the WARM flag as the authoritative retained-content bit
+        // so repeated compress/restore cycles never invent another 32-byte drop.
+        let logical_bytes_before =
+            if read_u16(&self.pages[i].payload.bytes, OFF_FLAGS) & FLAG_WARM == 0 {
+                HOT_BYTES
+            } else {
+                WARM_BYTES
+            };
 
         // Take the page out (a stack move — no heap allocation) so the
         // `remove_residual(&mut self, &mut page)` helper can hold both borrows.
@@ -188,8 +198,12 @@ impl MemoryProvider for SlhaAdapter {
             backend: self.backend,
             previous_state: MemoryState::Hot,
             new_state: MemoryState::Warm,
-            bytes_before: HOT_BYTES, // 128
-            bytes_after: WARM_BYTES, // 96 — the residual's 32 B are reclaimed
+            logical_bytes_before,
+            logical_bytes_after: WARM_BYTES,
+            resident_bytes_before: std::mem::size_of::<AlignedMemoryPage>(),
+            resident_bytes_after: std::mem::size_of::<AlignedMemoryPage>(),
+            resident_storage_released: false,
+            restore_fidelity: RestoreFidelity::Approximate,
             quality_delta,
             cpu_cycles: started.elapsed().as_nanos() as u64, // portable ns proxy
             representation: Some(representation),

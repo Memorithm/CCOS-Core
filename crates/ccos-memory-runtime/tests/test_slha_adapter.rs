@@ -2,7 +2,7 @@
 //! contract through the neutral `MemoryProvider` interface only.
 
 use ccos_memory_runtime::backend::slha_adapter::SlhaAdapter;
-use ccos_memory_runtime::telemetry::{MemoryBackend, MemoryState};
+use ccos_memory_runtime::telemetry::{MemoryBackend, MemoryState, RestoreFidelity};
 use ccos_memory_runtime::traits::{MemoryProvider, MemoryRuntimeError};
 use ccos_memory_runtime::AlignedMemoryPage;
 
@@ -18,8 +18,15 @@ fn hot_compress_warm_restore_hot() {
     assert_eq!(result.previous_state, MemoryState::Hot);
     assert_eq!(result.new_state, MemoryState::Warm);
     assert!(result.representation.is_some());
-    assert_eq!(result.bytes_before, 128);
-    assert_eq!(result.bytes_after, 96); // residual's 32 B reclaimed
+    assert_eq!(result.logical_bytes_before, 128);
+    assert_eq!(result.logical_bytes_after, 96);
+    assert_eq!(
+        result.resident_bytes_before,
+        std::mem::size_of::<AlignedMemoryPage>()
+    );
+    assert_eq!(result.resident_bytes_after, result.resident_bytes_before);
+    assert!(!result.resident_storage_released);
+    assert_eq!(result.restore_fidelity, RestoreFidelity::Approximate);
     assert_eq!(adapter.state(1).unwrap(), MemoryState::Warm);
 
     adapter.restore(1).unwrap();
@@ -72,4 +79,43 @@ fn evict_moves_to_cold() {
     adapter.load_page(3).unwrap();
     adapter.evict_page(3).unwrap();
     assert_eq!(adapter.state(3).unwrap(), MemoryState::Cold);
+}
+
+#[test]
+fn approximate_restore_does_not_reinflate_logical_payload() {
+    let mut adapter = SlhaAdapter::new();
+    adapter.load_page(11).unwrap();
+
+    let first = adapter.compress(11).unwrap();
+    assert_eq!(
+        (first.logical_bytes_before, first.logical_bytes_after),
+        (128, 96)
+    );
+
+    adapter.restore(11).unwrap();
+    let second = adapter.compress(11).unwrap();
+    assert_eq!(
+        (second.logical_bytes_before, second.logical_bytes_after),
+        (96, 96)
+    );
+    assert!(!second.resident_storage_released);
+    assert_eq!(second.restore_fidelity, RestoreFidelity::Approximate);
+}
+
+#[test]
+fn zero_payload_is_a_stable_codec_golden_vector() {
+    let mut adapter = SlhaAdapter::new();
+    adapter.load_page(9).unwrap();
+
+    let result = adapter.compress(9).unwrap();
+    let representation = result.representation.expect("representation present");
+
+    assert_eq!(representation, [0.0; 128]);
+    assert_eq!(
+        (result.logical_bytes_before, result.logical_bytes_after),
+        (128, 96)
+    );
+    assert_eq!(result.resident_bytes_before, result.resident_bytes_after);
+    assert!(!result.resident_storage_released);
+    assert_eq!(result.restore_fidelity, RestoreFidelity::Approximate);
 }

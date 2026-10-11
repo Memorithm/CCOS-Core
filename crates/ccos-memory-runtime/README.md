@@ -22,11 +22,13 @@ ever pulls `scirust`; `cargo tree` prints only this crate.
 
 ## Lifecycle
 
-`compress` moves a page **HOT → WARM**: it frees the 32-byte residual (footprint
-**128 → 96 B**) while preserving the latent, and returns the dequantized latent
-as the `representation`. `restore` brings it back **WARM → HOT** (latent-only —
-the residual is not recoverable). `evict_page` marks it **COLD** (CCOS persists
-it externally).
+`compress` moves a page **HOT → WARM**: it drops the 32-byte residual from
+the logical payload (**128 → 96 B**) while preserving the latent, but keeps the
+fixed resident `AlignedMemoryPage` slot unchanged. It therefore does not claim
+allocator or process-RSS savings. The returned `representation` is the
+dequantized latent. `restore` brings the page back **WARM → HOT** approximately
+(latent-only — the residual is not recoverable). `evict_page` marks it **COLD**
+(CCOS persists it externally).
 
 ## Quick check
 
