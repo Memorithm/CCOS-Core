@@ -16,7 +16,9 @@ A **zero-dependency** cognitive-memory middleware:
 - `backend::slha_adapter::SlhaAdapter` — a **self-contained** SLHAv2 tile backend.
 
 Lifecycle owned by the runtime: **HOT** (latent + residual) → **WARM** (residual
-removed, latent kept, 96 B) → **COLD** (paged out; persistence external to CCOS).
+zeroed, latent kept, 96 B logical content in the same fixed resident slot) →
+**COLD** (paged out; persistence external to CCOS). HOT→WARM does not release an
+allocation and does not claim an RSS reduction.
 
 ## Core principle — no `scirust` dependency, anywhere
 
@@ -75,15 +77,17 @@ Commit on a feature branch and open a **draft** PR:
 > **Title:** `feat: SLHAv2 memory backend as opt-in `slhav2` feature (zero-dep ccos-memory-runtime)`
 >
 > **Body:** Default build unchanged. `slhav2` is opt-in and pulls **no** scirust
-> (verified via `cargo tree`). WARM footprint = 96 B. The adapter is
+> (verified via `cargo tree`). WARM logical content = 96 B; the resident slot is
+> unchanged and no allocator/RSS saving is claimed. The adapter is
 > self-contained and exposes no backend-specific type in its public API.
 
 ## Design notes (settled — keep as-is)
 
 - **Zero dependencies.** The grouped-INT4 decode is vendored from scirust's tile
   ABI; scirust itself is never pulled in.
-- **WARM = 96 B** (latent 64 + metadata 32; only the 32-byte residual is freed).
-  Not 64 — 64 is the latent size, not the WARM footprint.
+- **WARM = 96 B logical content** (latent 64 + metadata 32); the residual bytes
+  are zeroed inside the same fixed page slot. No allocation is freed. Not 64 —
+  64 is the latent size, not the WARM logical content.
 - **Restore is approximate** (latent-only; the residual is gone after WARM).
   `RestoreMode::Exact` is a reserved forward-compat variant.
 - **Page lookup is O(n)** over a `Vec` (constraint: no HashMap). Fine at

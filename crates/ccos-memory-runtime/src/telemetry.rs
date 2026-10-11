@@ -15,22 +15,39 @@ pub enum MemoryBackend {
 pub enum MemoryState {
     /// Full representation available (latent + residual).
     Hot,
-    /// Reduced representation (residual removed/ignored; latent preserved).
+    /// Reduced logical representation (residual ignored; fixed resident slot retained).
     Warm,
     /// Paged out of active memory (persistence handled externally by CCOS).
     Cold,
 }
 
+/// Fidelity available after a compressed page is restored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestoreFidelity {
+    /// The discarded residual cannot be reconstructed from the resident page.
+    Approximate,
+    /// Every discarded component can be restored from separately qualified storage.
+    Exact,
+}
+
 /// The outcome of a compression (state transition) as exposed to the runtime.
-/// The backend generates the `representation`; the Monitor consumes it — the
-/// backend never calls the Monitor itself.
+///
+/// Logical bytes describe meaningful codec content. Resident bytes describe the
+/// in-memory page slot owned by the backend. A logical reduction is not evidence
+/// that an allocator returned memory or that process RSS decreased.
 #[derive(Debug, Clone)]
 pub struct CompressionResult {
     pub backend: MemoryBackend,
     pub previous_state: MemoryState,
     pub new_state: MemoryState,
-    pub bytes_before: usize,
-    pub bytes_after: usize,
+    pub logical_bytes_before: usize,
+    pub logical_bytes_after: usize,
+    pub resident_bytes_before: usize,
+    pub resident_bytes_after: usize,
+    /// True only when the backend actually releases resident storage.
+    pub resident_storage_released: bool,
+    /// Fidelity of the currently implemented restore path.
+    pub restore_fidelity: RestoreFidelity,
     /// Measured semantic degradation (backend-defined proxy).
     pub quality_delta: f32,
     pub cpu_cycles: u64,
