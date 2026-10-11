@@ -7,7 +7,7 @@ decrease.
 
 `CompressionResult` therefore reports two independent quantities:
 
-- `logical_bytes_before/after`: meaningful codec content, 128→96 bytes;
+- `logical_bytes_before/after`: meaningful codec content, 128→96 bytes on the first compression; an approximate restore keeps the residual absent, so a later compression reports 96→96 rather than fabricating another reduction;
 - `resident_bytes_before/after`: `size_of::<AlignedMemoryPage>()`, unchanged.
 
 `resident_storage_released` is false. `restore_fidelity` is

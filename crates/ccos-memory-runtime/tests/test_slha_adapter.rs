@@ -82,6 +82,27 @@ fn evict_moves_to_cold() {
 }
 
 #[test]
+fn approximate_restore_does_not_reinflate_logical_payload() {
+    let mut adapter = SlhaAdapter::new();
+    adapter.load_page(11).unwrap();
+
+    let first = adapter.compress(11).unwrap();
+    assert_eq!(
+        (first.logical_bytes_before, first.logical_bytes_after),
+        (128, 96)
+    );
+
+    adapter.restore(11).unwrap();
+    let second = adapter.compress(11).unwrap();
+    assert_eq!(
+        (second.logical_bytes_before, second.logical_bytes_after),
+        (96, 96)
+    );
+    assert!(!second.resident_storage_released);
+    assert_eq!(second.restore_fidelity, RestoreFidelity::Approximate);
+}
+
+#[test]
 fn zero_payload_is_a_stable_codec_golden_vector() {
     let mut adapter = SlhaAdapter::new();
     adapter.load_page(9).unwrap();

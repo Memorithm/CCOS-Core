@@ -173,6 +173,15 @@ impl MemoryProvider for SlhaAdapter {
         }
 
         let started = std::time::Instant::now();
+        // Approximate restore changes the lifecycle state but cannot recreate the
+        // residual. Keep the WARM flag as the authoritative retained-content bit
+        // so repeated compress/restore cycles never invent another 32-byte drop.
+        let logical_bytes_before =
+            if read_u16(&self.pages[i].payload.bytes, OFF_FLAGS) & FLAG_WARM == 0 {
+                HOT_BYTES
+            } else {
+                WARM_BYTES
+            };
 
         // Take the page out (a stack move — no heap allocation) so the
         // `remove_residual(&mut self, &mut page)` helper can hold both borrows.
@@ -189,7 +198,7 @@ impl MemoryProvider for SlhaAdapter {
             backend: self.backend,
             previous_state: MemoryState::Hot,
             new_state: MemoryState::Warm,
-            logical_bytes_before: HOT_BYTES,
+            logical_bytes_before,
             logical_bytes_after: WARM_BYTES,
             resident_bytes_before: std::mem::size_of::<AlignedMemoryPage>(),
             resident_bytes_after: std::mem::size_of::<AlignedMemoryPage>(),
