@@ -90,7 +90,10 @@ fn zero_payload_is_a_stable_codec_golden_vector() {
     let representation = result.representation.expect("representation present");
 
     assert_eq!(representation, [0.0; 128]);
-    assert_eq!((result.logical_bytes_before, result.logical_bytes_after), (128, 96));
+    assert_eq!(
+        (result.logical_bytes_before, result.logical_bytes_after),
+        (128, 96)
+    );
     assert_eq!(result.resident_bytes_before, result.resident_bytes_after);
     assert!(!result.resident_storage_released);
     assert_eq!(result.restore_fidelity, RestoreFidelity::Approximate);
