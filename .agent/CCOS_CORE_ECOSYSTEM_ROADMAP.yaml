@@ -214,3 +214,33 @@ ax_task_context_program:
     - Hub_owns_execution_lifecycle_truth
     - TaskIdentity_is_not_knowledge_authority
     - task_capability_is_not_inferred_from_memory_context
+
+audit_global_remediation_mem08_2026_10_13:
+  finding: MEM-08
+  role: upstream_owner_first_scanner_correction
+  status: merged_integrated_validated
+  default_branch: main
+  pull_request: 36
+  candidate_head: 423798237c21aab1251c6844c7c340ce09849bd2
+  merge_sha: 99ce3012426717907d150bc1df2ed0c14b3388e1
+  integrated_tree: 53a88656bd111fa936a96bf05cc870c526da96a5
+  consumer_repository: Memorithm/CCOS-Enterprise
+  consumer_pull_request: 194
+  contract:
+    - unknown_dirent_types_are_probed_descriptor_relative_instead_of_skipped
+    - directories_vanishing_during_walk_are_treated_as_concurrent_disappearance
+    - symlink_loops_and_escape_attempts_remain_fail_closed
+    - enterprise_import_must_match_this_integrated_source_byte_for_byte
+  candidate_validation_runs:
+    - 38364913213
+    - 38364913186
+    - 38364913197
+    - 38364913160
+  integrated_validation_runs:
+    - 38365626256
+    - 38365626261
+    - 38365626335
+    - 38365626100
+  limits:
+    - scanner_portability_is_qualified_on_the_existing_Linux_rustix_contract
+    - Enterprise_product_overlays_remain_consumer_owned
